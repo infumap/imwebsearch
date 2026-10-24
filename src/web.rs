@@ -2,20 +2,26 @@
 // SPDX-License-Identifier: MIT
 // See LICENSE.txt for the full license text.
 
+use std::collections::HashMap;
 use std::fmt::Write;
 
 use bytes::Bytes;
+use futures_util::FutureExt;
+use futures_util::future::{BoxFuture, Shared};
 use http_body_util::Full;
 use hyper::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ORIGIN};
 use hyper::{Method, Request, Response, StatusCode};
 use log::warn;
+use once_cell::sync::Lazy;
 use reqwest::Url;
 use serde_json::json;
+use tokio::sync::Mutex;
 
 mod status;
 
 pub use status::page as status_page;
 
+use crate::providers::SearchResult;
 use crate::routing::{self, SearchTrace};
 use crate::{protocol, search, tools};
 
@@ -23,6 +29,11 @@ const PAGE_RESULTS: usize = 10;
 const MAX_QUERY_BYTES: usize = 4_096;
 const HTML: &str = "text/html; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
+
+type BrowserSearchResult = Result<(Vec<SearchResult>, search::Source), String>;
+type PendingSearch = Shared<BoxFuture<'static, BrowserSearchResult>>;
+
+static PENDING_SEARCHES: Lazy<Mutex<HashMap<String, PendingSearch>>> = Lazy::new(Mutex::default);
 
 pub fn handles_path(path: &str) -> bool {
   matches!(path, "/" | "/search" | "/fetch" | "/search.css" | "/infumap.png" | "/favicon.ico")
@@ -66,6 +77,37 @@ fn parameter<B>(req: &Request<B>, name: &str) -> Option<String> {
   url.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned())
 }
 
+/// Browser navigation can replace a connection with another request for the
+/// same query. Share the running search and keep it alive across disconnects
+/// so the replacement receives the one-shot provider override's result.
+async fn browser_search(query: &str) -> BrowserSearchResult {
+  let pending = {
+    let mut searches = PENDING_SEARCHES.lock().await;
+    if let Some(pending) = searches.get(query) {
+      pending.clone()
+    } else {
+      let owned_query = query.to_owned();
+      let pending = async move {
+        let mut trace = SearchTrace::default();
+        let result = search::search(&owned_query, PAGE_RESULTS, &mut trace).await;
+        routing::record(&owned_query, &trace, None);
+        result.map_err(|error| error.to_string())
+      }
+      .boxed()
+      .shared();
+      searches.insert(query.to_owned(), pending.clone());
+      let running = pending.clone();
+      let key = query.to_owned();
+      tokio::spawn(async move {
+        let _ = running.await;
+        PENDING_SEARCHES.lock().await.remove(&key);
+      });
+      pending
+    }
+  };
+  pending.await
+}
+
 async fn search_page(query: &str) -> Response<Full<Bytes>> {
   let query = query.trim();
   if query.is_empty() {
@@ -76,10 +118,7 @@ async fn search_page(query: &str) -> Response<Full<Bytes>> {
     return response(StatusCode::BAD_REQUEST, HTML, page("", content, StatusCode::BAD_REQUEST));
   }
   let started = std::time::Instant::now();
-  let mut trace = SearchTrace::default();
-  let result = search::search(query, PAGE_RESULTS, &mut trace).await;
-  routing::record(query, &trace, None);
-  let (results, source) = match result {
+  let (results, source) = match browser_search(query).await {
     Ok(result) => result,
     Err(error) => {
       warn!("Browser search failed: {error}");

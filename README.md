@@ -2,6 +2,11 @@
 
 Locally hosted meta web-search / web-fetch.
 
+Use it for:
+- HTTP MCP web-search/web-fetch tools for LLMs.
+- Web search from your browser.
+- Default browser navigation bar web search.
+
 Simple to configure. Simple to operate.
 
 Each web-search request is handled by **a single** provider, with automatic failover and cooldown. This methodology makes best use of scarce free web-search capacity. 
@@ -16,12 +21,7 @@ A search request is handled by the highest tier with available capacity.
 
 Tier 1 has enough capacity to be useful (no configuration required, maximally private).
 
-Use it for:
-- Web search from your browser.
-- Default browser navigation bar web search.
-- LLM MCP web-search tool.
-
-Does not use any undocumented API or tricks to intentionally evade throttling/blocking.
+Does not use any undocumented APIs or tricks to intentionally evade throttling/blocking.
 
 **web-fetch MCP tool**
 
