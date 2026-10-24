@@ -146,6 +146,11 @@ async fn run_server(settings: &'static config::file::FileConfig) {
     eprintln!("Could not initialize web fetch: {error}");
     std::process::exit(1);
   }
+  if let Some(url) = &settings.fetch.gpu_tools_url {
+    info!("PDF service configured: {url} (native-only extraction; capabilities not yet checked).");
+  } else {
+    info!("PDF service not configured; set fetch.gpu_tools_url to enable native PDF extraction.");
+  }
 
   let config = match config::search_config() {
     Ok(config) => config,
