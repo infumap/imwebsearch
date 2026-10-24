@@ -240,7 +240,10 @@ async fn install(update: bool, deadline: Instant) -> InfuResult<PathBuf> {
     publish_active(&root, &info)?;
     return Ok(directory.join(executable(platform)));
   }
-  eprintln!("Installing official Chrome for Testing {version} ({platform}) in the data directory.");
+  eprintln!(
+    "Downloading official Chrome for Testing {version} ({platform}). This is a large download (up to 512 MiB) and may take several minutes. Installation directory: {}",
+    directory.display()
+  );
   let archive = tempfile::Builder::new()
     .prefix("download-")
     .suffix(".zip")
@@ -256,8 +259,12 @@ async fn install(update: bool, deadline: Instant) -> InfuResult<PathBuf> {
   if !response.status().is_success() || response.content_length().is_some_and(|size| size > MAX_ARCHIVE) {
     return Err("Chrome download failed or exceeds its 512 MiB limit.".into());
   }
+  if let Some(size) = response.content_length() {
+    eprintln!("Chrome archive download size: {:.1} MiB.", size as f64 / (1024.0 * 1024.0));
+  }
   let mut chunks = response.bytes_stream();
   let mut downloaded = 0_u64;
+  let mut last_progress = Instant::now();
   use tokio::io::AsyncWriteExt;
   while let Some(chunk) = chunks.next().await {
     let chunk = chunk.map_err(|_| "Browser archive download was interrupted.")?;
@@ -266,9 +273,17 @@ async fn install(update: bool, deadline: Instant) -> InfuResult<PathBuf> {
       return Err("Chrome archive exceeds 512 MiB.".into());
     }
     output.write_all(&chunk).await.map_err(|_| "Could not write browser archive.")?;
+    if last_progress.elapsed() >= Duration::from_secs(10) {
+      eprintln!("Chrome download in progress: {:.1} MiB downloaded.", downloaded as f64 / (1024.0 * 1024.0));
+      last_progress = Instant::now();
+    }
   }
   output.flush().await.map_err(|_| "Could not finish browser archive.")?;
   drop(output);
+  eprintln!(
+    "Chrome download complete ({:.1} MiB). Extracting and installing the browser...",
+    downloaded as f64 / (1024.0 * 1024.0)
+  );
   // The blocking installer owns the lock and staging guards through cleanup,
   // including if its async caller stops waiting at the overall deadline.
   tokio::task::spawn_blocking(move || {
@@ -290,6 +305,7 @@ async fn install(update: bool, deadline: Instant) -> InfuResult<PathBuf> {
     std::fs::rename(stage.path(), &directory).map_err(|_| "Could not publish browser installation.")?;
     let info = Installation { schema: 1, version, platform: platform.into(), archive_sha256: sha256 };
     publish_active(&root, &info)?;
+    eprintln!("Chrome installation complete: {}", directory.join(executable(platform)).display());
     Ok(directory.join(executable(platform)))
   })
   .await
