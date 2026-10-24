@@ -108,7 +108,15 @@ additional boundary; Chrome's own sandbox remains required on both platforms.
    and the profile's own cookies. The server still validates the requested and final
    URLs. The extension blocks literal private addresses and local names in its
    tabs, but DNS names that resolve to private addresses are not checked. Run the
-   relay in a dedicated profile that is signed in to nothing.
+   relay in a dedicated profile that is signed in to nothing. The extension uses
+   `chrome.debugger` only on its temporary job tabs to intercept document responses.
+   PDF bytes are streamed from the original response in bounded chunks over the
+   authenticated relay, preserving that profile's session. The server enforces
+   its PDF byte limit, final URL checks, complete transfer size and PDF signature
+   before passing bytes to the same native extraction service and cache. A PDF
+   response does not switch to the owned headless browser. Cancellation or expiry
+   detaches response capture and closes the job tab; a pending verification
+   challenge is left open as before.
 
 Host configuration can prevent a confined browser from starting, particularly
 when user namespaces are restricted. The server does not install privileged

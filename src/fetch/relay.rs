@@ -20,6 +20,8 @@ use async_tungstenite::tungstenite::Message;
 use async_tungstenite::tungstenite::handshake::derive_accept_key;
 use async_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use async_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use bytes::Bytes;
 use futures_util::StreamExt;
 use http_body_util::Full;
@@ -39,11 +41,12 @@ use crate::duration::span;
 use crate::error::{InfuError, InfuResult};
 
 use super::config::FetchConfig;
-use super::http::{DownloadedDocument, Validators};
+use super::http::{DownloadedDocument, Validators, is_pdf};
 use super::policy::assert_public_destination;
 
 /// Bumped when the message format changes; the extension must match.
-const PROTOCOL_VERSION: u64 = 1;
+const PROTOCOL_VERSION: u64 = 2;
+const PDF_CHUNK_BYTES: usize = 64 * 1024;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// The extension pings every 20 seconds to keep its service worker alive.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(70);
@@ -54,6 +57,8 @@ pub(super) struct Relay {
   token: Option<String>,
   timeout: Duration,
   max_rendered_bytes: usize,
+  /// Zero when native PDF extraction is not configured.
+  pdf_limit: usize,
   html_dump_dir: Option<std::path::PathBuf>,
   connection: StdMutex<Option<Connection>>,
   slots: Semaphore,
@@ -66,9 +71,28 @@ pub(super) struct Relay {
 struct Connection {
   generation: u64,
   outgoing: mpsc::UnboundedSender<Message>,
-  pending: Arc<StdMutex<HashMap<u64, oneshot::Sender<Reply>>>>,
+  pending: Arc<StdMutex<HashMap<u64, PendingReply>>>,
   connected_at: i64,
   agent: String,
+}
+
+struct PendingReply {
+  sender: oneshot::Sender<Reply>,
+  pdf_body: Vec<u8>,
+}
+
+impl PendingReply {
+  fn append_pdf(&mut self, data: &str, limit: usize) -> InfuResult<()> {
+    if data.len() > PDF_CHUNK_BYTES.div_ceil(3) * 4 {
+      return Err("Registered browser returned an oversized PDF chunk.".into());
+    }
+    let bytes = BASE64_STANDARD.decode(data).map_err(|_| "Registered browser returned an invalid PDF chunk.")?;
+    if bytes.len() > PDF_CHUNK_BYTES || bytes.len() > limit.saturating_sub(self.pdf_body.len()) {
+      return Err("Registered browser PDF exceeds its byte limit.".into());
+    }
+    self.pdf_body.extend_from_slice(&bytes);
+    Ok(())
+  }
 }
 
 #[derive(Deserialize)]
@@ -84,6 +108,10 @@ enum Incoming {
   Waiting {
     id: u64,
   },
+  PdfChunk {
+    id: u64,
+    data: String,
+  },
   Result {
     id: u64,
     #[serde(flatten)]
@@ -91,7 +119,7 @@ enum Incoming {
   },
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 struct Reply {
   #[serde(default)]
   url: Option<String>,
@@ -109,15 +137,17 @@ struct Reply {
   /// The page is still showing a verification challenge, left open for its owner.
   #[serde(default)]
   verification_pending: bool,
-  /// The document is a PDF, which the extension does not read.
+  /// PDF bytes arrive in bounded chunks before this final reply.
   #[serde(default)]
   pdf: bool,
-}
-
-pub(super) enum Rendered {
-  Document(DownloadedDocument),
-  /// The owned headless browser must read this document.
-  Pdf,
+  #[serde(default)]
+  pdf_size: Option<usize>,
+  #[serde(skip)]
+  pdf_body: Vec<u8>,
+  #[serde(default)]
+  etag: Option<String>,
+  #[serde(default)]
+  last_modified: Option<String>,
 }
 
 impl Relay {
@@ -126,6 +156,7 @@ impl Relay {
       token: config.relay_token.clone(),
       timeout: config.relay_timeout,
       max_rendered_bytes: config.max_rendered_bytes,
+      pdf_limit: if config.gpu_tools_url.is_some() { config.max_pdf_bytes } else { 0 },
       html_dump_dir: config.html_dump_dir.clone(),
       connection: StdMutex::new(None),
       slots: Semaphore::new(CONCURRENT_JOBS),
@@ -167,7 +198,7 @@ impl Relay {
   }
 
   /// Render a page in the registered browser.
-  pub async fn render(&self, requested: &Url, deadline: Instant) -> InfuResult<Rendered> {
+  pub async fn render(&self, requested: &Url, deadline: Instant) -> InfuResult<DownloadedDocument> {
     let _permit = timeout_at(deadline, self.slots.acquire())
       .await
       .map_err(|_| "Browser relay deadline expired while queued.")?
@@ -176,7 +207,7 @@ impl Relay {
       self.connection.lock().expect("Relay lock poisoned").clone().ok_or("No browser is connected to the relay.")?;
     let id = self.next_id.fetch_add(1, Ordering::Relaxed);
     let (sender, receiver) = oneshot::channel();
-    connection.pending.lock().expect("Relay lock poisoned").insert(id, sender);
+    connection.pending.lock().expect("Relay lock poisoned").insert(id, PendingReply { sender, pdf_body: Vec::new() });
     let job = PendingJob { id, connection: &connection, finished: false };
     // Leave the extension a moment to send its answer before our deadline.
     let budget = deadline.saturating_duration_since(Instant::now()).saturating_sub(Duration::from_secs(1));
@@ -186,6 +217,7 @@ impl Relay {
       "url": requested.as_str(),
       "timeout_ms": budget.as_millis() as u64,
       "limit": self.max_rendered_bytes,
+      "pdf_limit": self.pdf_limit,
       "dump": self.html_dump_dir.is_some(),
     });
     connection.outgoing.send(Message::text(message.to_string())).map_err(|_| "Browser relay disconnected.")?;
@@ -201,9 +233,6 @@ impl Relay {
           .into(),
       );
     }
-    if reply.pdf {
-      return Ok(Rendered::Pdf);
-    }
     if let Some(status) = reply.status {
       return Err(InfuError::from_http_status(status));
     }
@@ -213,20 +242,37 @@ impl Relay {
     let final_url = Url::parse(reply.url.as_deref().ok_or("Registered browser returned no final URL.")?)
       .map_err(|_| "Registered browser returned an invalid final URL.")?;
     assert_public_destination(&final_url).await?;
-    let body = reply.body.ok_or("Registered browser returned no document.")?;
-    if body.len() > self.max_rendered_bytes {
-      return Err("Rendered document exceeds its byte or complexity limit.".into());
-    }
-    if let (Some(directory), Some(raw)) = (self.html_dump_dir.clone(), reply.raw) {
-      super::browser::dump_html(directory, raw);
-    }
-    Ok(Rendered::Document(DownloadedDocument {
+    let (body, content_type) = if reply.pdf {
+      if self.pdf_limit == 0 {
+        return Err(super::pdf::UNSUPPORTED.into());
+      }
+      if reply.pdf_size != Some(reply.pdf_body.len()) || !is_pdf(&reply.pdf_body) {
+        return Err("Registered browser returned an incomplete or invalid PDF.".into());
+      }
+      (reply.pdf_body, "application/pdf".to_owned())
+    } else {
+      if !reply.pdf_body.is_empty() {
+        return Err("Registered browser returned PDF chunks without a PDF result.".into());
+      }
+      let body = reply.body.ok_or("Registered browser returned no document.")?;
+      if body.len() > self.max_rendered_bytes {
+        return Err("Rendered document exceeds its byte or complexity limit.".into());
+      }
+      if let (Some(directory), Some(raw)) = (self.html_dump_dir.clone(), reply.raw) {
+        super::browser::dump_html(directory, raw);
+      }
+      (body.into_bytes(), reply.content_type.unwrap_or_else(|| "text/html".to_owned()))
+    };
+    Ok(DownloadedDocument {
       final_url,
-      content_type: reply.content_type.unwrap_or_else(|| "text/html".to_owned()),
-      body: body.into_bytes(),
-      validators: Validators::default(),
+      content_type,
+      body,
+      validators: Validators {
+        etag: reply.etag.filter(|value| value.len() <= 1024),
+        last_modified: reply.last_modified.filter(|value| value.len() <= 1024),
+      },
       transport: "relay",
-    }))
+    })
   }
 
   /// Answer a WebSocket upgrade on `/browser-relay`.
@@ -361,9 +407,20 @@ impl Relay {
         Ok(Incoming::Waiting { id }) => {
           log::info!("Browser relay job {id} is waiting for the user to complete a verification challenge.");
         }
-        Ok(Incoming::Result { id, reply }) => {
-          if let Some(sender) = pending.lock().expect("Relay lock poisoned").remove(&id) {
-            let _ = sender.send(reply);
+        Ok(Incoming::PdfChunk { id, data }) => {
+          let mut jobs = pending.lock().expect("Relay lock poisoned");
+          if let Some(job) = jobs.get_mut(&id)
+            && let Err(error) = job.append_pdf(&data, self.pdf_limit)
+          {
+            let job = jobs.remove(&id).expect("Pending relay job disappeared");
+            let _ = job.sender.send(Reply { error: Some(error.to_string()), ..Reply::default() });
+            let _ = outgoing.send(Message::text(json!({ "type": "cancel", "id": id }).to_string()));
+          }
+        }
+        Ok(Incoming::Result { id, mut reply }) => {
+          if let Some(job) = pending.lock().expect("Relay lock poisoned").remove(&id) {
+            reply.pdf_body = job.pdf_body;
+            let _ = job.sender.send(reply);
           }
         }
         Ok(Incoming::Hello { .. }) => {}

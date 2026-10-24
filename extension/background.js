@@ -8,7 +8,9 @@
 
 importScripts('capture.js');
 
-const PROTOCOL_VERSION = 1;
+const PROTOCOL_VERSION = 2;
+const PDF_CHUNK_BYTES = 64 * 1024;
+const PDF_SEND_BUFFER_BYTES = 256 * 1024;
 const DEFAULT_SERVER_URL = 'ws://127.0.0.1:8791/browser-relay';
 // WebSocket traffic keeps the service worker alive; the server drops silent connections.
 const PING_MS = 20000;
@@ -100,6 +102,7 @@ async function connect() {
     pingTimer = setInterval(() => ws.send(JSON.stringify({type: 'ping'})), PING_MS);
   };
   ws.onmessage = event => {
+    if (socket !== ws) return;
     let message;
     try { message = JSON.parse(event.data); } catch (_) { return; }
     handle(message);
@@ -146,7 +149,9 @@ function handle(message) {
 
 async function runJob(request) {
   const job = {id: request.id, tabId: null, previousTabId: null, ruleIds: [], cancelled: false, challenged: false, notified: false,
-    mainFrames: new Set(), status: null, contentType: null, navError: null, download: false};
+    mainFrames: new Set(), status: null, contentType: null, navError: null, download: false,
+    socket, finished: false, debuggerAttached: false, mainFrameId: null, capturingPdf: false, pdfResult: null,
+    captureError: null, pdfLimit: request.pdf_limit, deadline: Date.now() + request.timeout_ms};
   jobs.set(job.id, job);
   let result;
   try {
@@ -154,7 +159,9 @@ async function runJob(request) {
   } catch (error) {
     result = {error: String(error.message || error)};
   }
+  job.finished = true;
   jobs.delete(job.id);
+  if (job.debuggerAttached) await chrome.debugger.detach({tabId: job.tabId}).catch(() => {});
   if (job.ruleIds.length) {
     await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds: job.ruleIds}).catch(() => {});
   }
@@ -162,7 +169,9 @@ async function runJob(request) {
   if (job.tabId !== null && !result.verification_pending) await closeTab(job);
   chrome.notifications.clear(`job-${job.id}`);
   updateBadge(socket?.readyState === WebSocket.OPEN ? 'connected' : 'disconnected');
-  send({type: 'result', id: job.id, ...result});
+  if (!job.cancelled && socket === job.socket && job.socket.readyState === WebSocket.OPEN) {
+    job.socket.send(JSON.stringify({type: 'result', id: job.id, ...result}));
+  }
 }
 
 async function openTab(job) {
@@ -218,12 +227,128 @@ function readText() {
   return {url: location.href, body};
 }
 
+function checkJob(job) {
+  if (job.cancelled || job.finished) throw new Error('Cancelled.');
+  if (Date.now() >= job.deadline) throw new Error('The document did not finish loading before the deadline.');
+  if (socket !== job.socket || job.socket.readyState !== WebSocket.OPEN) throw new Error('Browser relay disconnected.');
+}
+
+function debuggerCommand(job, method, params = {}) {
+  return chrome.debugger.sendCommand({tabId: job.tabId}, method, params);
+}
+
+async function capturePdfResponses(job) {
+  await chrome.debugger.attach({tabId: job.tabId}, '1.3');
+  job.debuggerAttached = true;
+  checkJob(job);
+  const {frameTree} = await debuggerCommand(job, 'Page.getFrameTree');
+  job.mainFrameId = frameTree.frame.id;
+  // Pause document responses before Chrome's PDF viewer or download handler
+  // consumes them. HTML continues normally, including verification challenges.
+  await debuggerCommand(job, 'Fetch.enable', {
+    patterns: [{resourceType: 'Document', requestStage: 'Response'}],
+  });
+}
+
+async function sendPdfChunk(job, data) {
+  checkJob(job);
+  // Keep large PDFs from accumulating in the WebSocket's browser-side queue.
+  while (job.socket.bufferedAmount > PDF_SEND_BUFFER_BYTES) {
+    await sleep(25);
+    checkJob(job);
+  }
+  job.socket.send(JSON.stringify({type: 'pdf_chunk', id: job.id, data}));
+}
+
+function encodeBytes(bytes) {
+  let binary = '';
+  for (let start = 0; start < bytes.length; start += 8192) {
+    binary += String.fromCharCode(...bytes.subarray(start, start + 8192));
+  }
+  return btoa(binary);
+}
+
+async function streamPdf(job, requestId) {
+  const {stream} = await debuggerCommand(job, 'Fetch.takeResponseBodyAsStream', {requestId});
+  let size = 0;
+  try {
+    for (;;) {
+      checkJob(job);
+      const chunk = await debuggerCommand(job, 'IO.read', {handle: stream, size: PDF_CHUNK_BYTES});
+      checkJob(job);
+      const bytes = chunk.base64Encoded ? null : new TextEncoder().encode(chunk.data);
+      const data = bytes ? encodeBytes(bytes) : chunk.data;
+      const length = bytes ? bytes.length : atob(data).length;
+      if (length > PDF_CHUNK_BYTES || length > job.pdfLimit - size) throw new Error('PDF exceeds its download byte limit.');
+      size += length;
+      if (length) await sendPdfChunk(job, data);
+      if (chunk.eof) return size;
+    }
+  } finally {
+    await debuggerCommand(job, 'IO.close', {handle: stream}).catch(() => {});
+  }
+}
+
+async function captureResponse(job, response) {
+  const {requestId, frameId, responseStatusCode: status} = response;
+  if (job.cancelled || job.finished) {
+    await debuggerCommand(job, 'Fetch.failRequest', {requestId, errorReason: 'Aborted'});
+    return;
+  }
+  const headers = response.responseHeaders || [];
+  const header = name => headers.find(entry => entry.name.toLowerCase() === name)?.value;
+  const type = (header('content-type') || '').split(';')[0].trim().toLowerCase();
+  // Octet-stream PDFs are also captured; the server checks their PDF signature.
+  const pdf = type === 'application/pdf' || type === 'application/octet-stream';
+  if (frameId !== job.mainFrameId || !pdf || status >= 300 && status < 400) {
+    await debuggerCommand(job, 'Fetch.continueRequest', {requestId});
+    return;
+  }
+  job.capturingPdf = true;
+  job.challenged = false;
+  const result = {url: response.request.url, content_type: 'application/pdf', pdf: true,
+    etag: header('etag'), last_modified: header('last-modified')};
+  let reply;
+  try {
+    if (status < 200 || status >= 300) {
+      reply = {status};
+    } else {
+      if (job.pdfLimit > 0) result.pdf_size = await streamPdf(job, requestId);
+      checkJob(job);
+      reply = result;
+    }
+  } finally {
+    // A streamed response cannot be continued. Abort only this navigation; the
+    // original bytes have already been sent to the server for native extraction.
+    await debuggerCommand(job, 'Fetch.failRequest', {requestId, errorReason: 'Aborted'}).catch(() => {});
+  }
+  checkJob(job);
+  job.pdfResult = reply;
+}
+
+chrome.debugger.onEvent.addListener((source, method, params) => {
+  if (source.sessionId || method !== 'Fetch.requestPaused') return;
+  const job = jobForTab(source.tabId);
+  if (!job?.debuggerAttached) return;
+  captureResponse(job, params).catch(error => { job.captureError = String(error.message || error); });
+});
+
+chrome.debugger.onDetach.addListener(source => {
+  const job = jobForTab(source.tabId);
+  if (job) {
+    job.debuggerAttached = false;
+    job.captureError = 'PDF response capture was detached; retry the fetch without opening DevTools in its tab.';
+  }
+});
+
 async function render(request, job) {
   const url = new URL(request.url);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('Unsupported URL scheme.');
-  const deadline = Date.now() + request.timeout_ms;
+  if (!Number.isSafeInteger(job.pdfLimit) || job.pdfLimit < 0) throw new Error('Invalid PDF byte limit.');
   const tab = await openTab(job);
   await blockPrivateAddresses(job);
+  await capturePdfResponses(job);
+  checkJob(job);
   await chrome.tabs.update(tab.id, {url: url.href});
   let started = null;
   let changed = 0;
@@ -231,15 +356,17 @@ async function render(request, job) {
   let challengeSince = null;
   for (;;) {
     await sleep(100);
-    if (Date.now() >= deadline || job.cancelled) {
+    if (Date.now() >= job.deadline || job.cancelled) {
       if (job.challenged) return {verification_pending: true};
       throw new Error(job.cancelled ? 'Cancelled.' : 'The page did not finish loading before the deadline.');
     }
+    if (job.captureError) throw new Error(job.captureError);
+    if (job.pdfResult) return job.pdfResult;
+    if (job.capturingPdf) continue;
     if (job.download) throw new Error('The URL started a file download rather than opening a document.');
     if (job.navError) throw new Error(`Navigation failed: ${job.navError}.`);
-    // The server reads PDFs with its own headless browser.
-    if (/application\/pdf/i.test(job.contentType || '')) return {pdf: true};
     const probe = await inject(tab.id, imwebsearchProbe);
+    if (job.capturingPdf) continue;
     if (!probe?.ready) {
       started = null;
       signature = '';
@@ -254,13 +381,16 @@ async function render(request, job) {
     const settled = now - started >= 750 && now - changed >= 400;
     if (!(settled && probe.meaningful || now - started >= 3000)) continue;
     const type = await inject(tab.id, () => document.contentType);
+    if (job.capturingPdf) continue;
     if (type && !/html/i.test(type)) {
       const text = await inject(tab.id, readText);
+      if (job.capturingPdf) continue;
       if (!text) continue;
       if (job.status >= 400) return {status: job.status};
       return {url: text.url, content_type: type, body: text.body};
     }
     const snapshot = await inject(tab.id, imwebsearchCapture, [{limit: request.limit, dump: request.dump}]);
+    if (job.capturingPdf) continue;
     if (!snapshot) continue;
     if (snapshot.oversized) throw new Error('Rendered document exceeds its byte or complexity limit.');
     if (snapshot.blocked?.kind === 'challenge') {

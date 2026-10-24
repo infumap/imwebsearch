@@ -145,17 +145,13 @@ impl FetchState {
   }
 
   /// Render in the relay browser when one is connected, otherwise in the owned
-  /// headless browser. The relay does not read PDFs, so those still use headless,
-  /// unless PDF extraction is unconfigured and the download would be wasted.
+  /// headless browser. PDF responses retain the selected browser's session and
+  /// their bytes go to the native PDF extraction service.
   async fn render(&self, requested: &Url, deadline: Instant) -> InfuResult<DownloadedDocument> {
     if !self.relay.connected() {
       return self.browser.render(requested, deadline).await;
     }
-    match self.relay.render(requested, deadline).await? {
-      relay::Rendered::Document(document) => Ok(document),
-      relay::Rendered::Pdf if !self.pdf.supported() => Err(pdf::UNSUPPORTED.into()),
-      relay::Rendered::Pdf => self.browser.render(requested, deadline).await,
-    }
+    self.relay.render(requested, deadline).await
   }
 
   /// The whole extracted text; `pages::chunk` slices it for the response.
