@@ -133,7 +133,18 @@ async fn search_page(query: &str) -> Response<Full<Bytes>> {
     started.elapsed().as_secs_f64()
   );
   if !source.providers().is_empty() {
-    let _ = write!(content, ", served by: {}", escape(&source.providers().join(", ")));
+    content.push_str(", served by: ");
+    for (index, provider) in source.providers().iter().enumerate() {
+      if index > 0 {
+        content.push_str(", ");
+      }
+      let name = escape(provider);
+      if let Some(homepage) = provider_homepage(provider) {
+        let _ = write!(content, "<a href=\"{homepage}\" rel=noreferrer>{name}</a>");
+      } else {
+        content.push_str(&name);
+      }
+    }
   }
   content.push_str("</span></div>");
   if let Some(note) = source.note() {
@@ -185,6 +196,25 @@ async fn fetch_page<B>(req: &Request<B>) -> Response<Full<Bytes>> {
   match result["content"][0]["text"].as_str() {
     Some(text) => response(status, TEXT, text.to_owned()),
     None => response(StatusCode::INTERNAL_SERVER_ERROR, TEXT, "Fetch returned no text."),
+  }
+}
+
+fn provider_homepage(provider: &str) -> Option<&'static str> {
+  match provider {
+    "you" => Some("https://you.com/"),
+    "exa" | "exa_mcp" => Some("https://exa.ai/"),
+    "tavily" | "tavily_mcp" => Some("https://www.tavily.com/"),
+    "diffbot" => Some("https://www.diffbot.com/"),
+    "firecrawl" | "firecrawl_mcp" => Some("https://www.firecrawl.dev/"),
+    "brave" => Some("https://brave.com/"),
+    "parallel" | "parallel_mcp" => Some("https://parallel.ai/"),
+    "brightdata" => Some("https://brightdata.com/"),
+    "serpapi" => Some("https://serpapi.com/"),
+    "context" => Some("https://www.context.dev/"),
+    "purili" => Some("https://puri.li/"),
+    "hacker_news" => Some("https://news.ycombinator.com/"),
+    "wikipedia" => Some("https://www.wikipedia.org/"),
+    _ => None,
   }
 }
 
