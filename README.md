@@ -2,34 +2,32 @@
 
 Locally hosted meta web-search / web-fetch.
 
-Use it for:
-- HTTP MCP web-search/web-fetch tools for LLMs.
-- Web search from your browser.
-- Default browser navigation bar web search.
-
 Simple to configure. Simple to operate.
 
-Each web-search request is handled by **a single** provider, with automatic failover and cooldown. This methodology makes best use of scarce free web-search capacity. 
+Each web-search request is handled by **a single** provider, with automatic failover and cooldown. This strategy makes best use of scarce free web-search capacity. 
 
 Four tiers:
-1. High quality search providers with public access, no account/API key required (5 providers)
-2. High quality search providers, free account / API key required (9 providers)
-3. Lower quality search providers (1 provider)
-4. Fallback to non-general but reliable/high volume search (wikipedia/hacker news aggregated).
+1. High quality search providers with public access, no account/API key required (3 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai))
+2. High quality search providers, free account / API key required (9 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai), [brave](https://search.brave.com), [brightdata](https://brightdata.com), [diffbot](https://diffbot.com), [firecrawl](https://firecrawl.dev), [serpapi](https://serpapi.com), [tavily](https://tavily.com))
+3. Lower quality search providers (1 provider: [purili](https://puri.li))
+4. Fallback to non-general but reliable/high volume search ([wikipedia]()/[hacker news](https://news.ycombinator.com) aggregated).
 
 A search request is handled by the highest tier with available capacity.
 
 Tier 1 has enough capacity to be useful (no configuration required, maximally private).
 
-Does not use any undocumented APIs or tricks to intentionally evade throttling/blocking.
+Use it for:
+- HTTP MCP web-search/web-fetch tools for LLMs.
+- Web search from your browser.
+- Default browser navigation bar web search.
 
-**web-fetch MCP tool**
+web-search does not use any undocumented APIs or tricks to intentionally evade throttling/blocking.
 
-Extracts and returns page content, prepended with heading->offset information. offset/max_chars style API for efficient use of LLM context.
+web-fetch extracts and returns page content (i.e. no HTML mark-up), prepended with heading:offset information and the API has offset/max_chars parameters. This strategy makes efficient use of valuable LLM context.
 
-- Includes a Chrome extension to fetch pages via a real browser with user take-over capability (similar to how OpenAI Operator and other automation tools work). Workflow: give your query to the LLM. Watch your browser as your LLM fetches the pages it needs, and handle any login / "I am a human" checks etc. as they come up. Ideally, you should use a browser in a sandboxed environment for security reasons.
-- Fallback to headless Chrome.
+Includes a Chrome extension to fetch pages via a real browser with user take-over capability (similar to how OpenAI Operator and other automation tools work). Fallback to headless Chrome.
 
+Connect to Infumap's [pdf text extraction](https://github.com/infumap/infumap/tree/master/tools/gpu) tool (or gpu tool gateway) to enable text extraction from pdfs.
 
 ## Running
 
