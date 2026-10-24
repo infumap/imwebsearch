@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font: 13px system-ui, sans-serif; width: 320px; margin: 12px; }
+  label { display: block; margin: 8px 0 2px; }
+  input[type=text], input[type=password] { width: 100%; box-sizing: border-box; padding: 4px; }
+  .row { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+  button { margin-top: 10px; }
+  #status { margin-top: 10px; color: #555; }
+  #status strong { color: #000; }
+</style>
+</head>
+<body>
+  <label for="serverUrl">Server WebSocket URL</label>
+  <input id="serverUrl" type="text" placeholder="ws://127.0.0.1:8791/browser-relay">
+  <label for="token">Relay token (browser_relay.token)</label>
+  <input id="token" type="password" autocomplete="off">
+  <div class="row"><input id="enabled" type="checkbox"><label for="enabled" style="margin:0">Connect</label></div>
+  <button id="save">Save</button>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>

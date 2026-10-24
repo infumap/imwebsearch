@@ -1,0 +1,188 @@
+# imwebsearch configuration
+
+# All files written by this service are under this directory.
+data_dir = "~/.imwebsearch"
+
+[server]
+host = "127.0.0.1"
+port = 8791
+
+[logging]
+filter = "debug"
+
+
+#### General Web Search Providers
+
+[providers.you]
+# *** ENABLED BY DEFAULT ***
+# https://you.com/docs/agents/mcp-server
+# MCP API provides 100 searches/day free.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 5
+tier = 1
+
+[providers.exa_mcp]
+# *** ENABLED BY DEFAULT ***
+# https://exa.ai/docs/get-started/exa-mcp
+# Free anonymous MCP API, but rate-limited (undocumented). Configuration in exa examples suggests 50/day.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 1
+tier = 1
+
+[providers.tavily_mcp]
+# *** ENABLED BY DEFAULT ***
+# https://docs.tavily.com/documentation/keyless
+# Free anonymous MCP API. But Rate-limited (undocumented).
+# Note: In practice, I am get no free quota.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 1
+tier = 1
+
+[providers.firecrawl_mcp]
+# *** ENABLED BY DEFAULT ***
+# https://docs.firecrawl.dev/mcp-server/keyless
+# Free anonymous MCP API. Per-IP daily request/credit caps exist, but values are unpublished.
+# Note: In practice, I am get no free quota.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 1
+tier = 1
+
+[providers.parallel_mcp]
+# *** ENABLED BY DEFAULT ***
+# https://docs.parallel.ai/integrations/mcp/search-mcp
+# Free anonymous MCP API. rate-limits are unpublished.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 2
+tier = 1
+
+[providers.exa]
+# https://exa.ai/docs/admin/pricing
+# $10 free credit/month - about 2,500 searches.
+# Free account and API key required; no credit card needed.
+api_key = ""
+tier = 2
+
+[providers.tavily]
+# https://docs.tavily.com/documentation/api-credits
+# 1,000 credits/month free - 1,000 searches.
+# Free account and API key required; no credit card needed.
+api_key = ""
+tier = 2
+
+[providers.diffbot]
+# https://www.diffbot.com/pricing
+# 10,000 credits/month free - up to 10,000 searches.
+# Throttled at 5 requests/second.
+# Free account and API key required; no credit card needed.
+api_key = ""
+tier = 2
+
+[providers.firecrawl]
+# https://docs.firecrawl.dev/billing
+# 1,000 credits/month free - about 500 searches.
+# Throttled at 10 requests/minute.
+# Free account and API key required; no credit card needed.
+api_key = ""
+tier = 2
+
+[providers.brave]
+# https://api-dashboard.search.brave.com/documentation/pricing
+# $5/month free - 1,000 searches.
+# Free account and API key required.
+# Credit card required, but set "Monthly usage limit" to "Free credits only".
+api_key = ""
+tier = 2
+
+[providers.parallel]
+# https://parallel.ai/pricing
+# $5 recurring free credits/month - up to 5,000 Fast searches.
+# Free account and API key required.
+api_key = ""
+tier = 2
+
+[providers.brightdata]
+# https://brightdata.com/pricing/mcp-server
+# 5,000 requests/month free - up to 5,000 searches.
+# Free account and API key required; no credit card needed.
+api_key = ""
+tier = 2
+
+[providers.serpapi]
+# https://serpapi.com/
+# 250 searches/month free.
+# Free account and API key required.
+api_key = ""
+tier = 2
+
+[providers.context]
+# https://www.context.dev/search-api
+# 1,000 credits/month free - about 1,000 searches at 10 results each.
+# Search costs 1 credit per 10 returned results, rounded up.
+# Free account and API key required; no credit card needed.
+api_key = ""
+tier = 2
+
+[providers.purili]
+# *** ENABLED BY DEFAULT ***
+# https://puri.li/developer/documentation
+# Free public JSON search API. No API key or fixed request quota.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 10
+tier = 3
+
+
+#### Fallback Search Providers
+
+# Used only when no general web provider can return results.
+# Results from all configured fallback providers are aggregated.
+
+[fallback_providers.wikipedia]
+# *** ENABLED BY DEFAULT ***
+# Free, no API key.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 30
+language = "en"
+
+[fallback_providers.hacker_news]
+# *** ENABLED BY DEFAULT ***
+# https://hn.algolia.com/api
+# Via free Algolia API, no key required.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 30
+
+
+
+[browser]
+# Omit path to select a managed or locally discovered Chrome/Chromium.
+# A configured path selects that exact executable without discovery fallback.
+# path = "/absolute/path/to/chromium"
+# Managed browser versions and active.json live under data_dir/cache/browsers/.
+
+[browser_relay]
+# Lets a desktop browser running the extension in extension/
+# register with the server. While it is connected, it renders every page in place
+# of the headless browser, and its user can complete bot-protection challenges.
+# Set a random secret of at least 32 characters (for example the output of
+# `openssl rand -hex 32`) here and in the extension. Empty disables the relay.
+token = ""
+# Time allowed for a fetch while a browser is connected, including any human
+# verification (fetch.timeout_secs applies if larger). Keep it below the MCP
+# client's timeout (Infumap's default is 60 seconds).
+timeout_secs = 55
+
+[fetch]
+timeout_secs = 30
+max_document_bytes = 16777216
+max_rendered_bytes = 16777216
+max_pdf_bytes = 134217728
+max_pdf_response_bytes = 16777216
+# Omit to leave native PDF extraction unavailable.
+# gpu_tools_url = "http://127.0.0.1:8787"
+# Save raw rendered HTML under data_dir/html-dumps/ when enabled.
+html_dumps_enabled = false
+
+[fetch.pdf_cache]
+enabled = true
+max_bytes = 2147483648
+ttl_secs = 86400
+refresh = false

@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "IMWebSearch Browser Relay",
+  "version": "0.1.0",
+  "description": "Lets an imwebsearch server render pages in this browser when bot protection refuses its headless browser.",
+  "minimum_chrome_version": "116",
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "IMWebSearch relay", "default_icon": "icon.png" },
+  "icons": { "128": "icon.png" },
+  "permissions": [
+    "alarms",
+    "declarativeNetRequestWithHostAccess",
+    "downloads",
+    "notifications",
+    "scripting",
+    "storage",
+    "tabs",
+    "webNavigation",
+    "webRequest"
+  ],
+  "host_permissions": ["<all_urls>"]
+}

@@ -1,0 +1,8 @@
+<h1 class="home-title">Web search</h1>
+<form class="search-form" action="/search" method="get" role="search">
+  <label class="visually-hidden" for="query">Search the web</label>
+  <span class="search-icon" aria-hidden="true"></span>
+  <input id="query" name="q" type="search" value="{query}" placeholder="Search the web" maxlength="4096" required autofocus>
+  <button type="submit">Search</button>
+</form>
+<section class="search-content" aria-label="Search results">{content}</section>

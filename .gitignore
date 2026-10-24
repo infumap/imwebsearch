@@ -1,0 +1,11 @@
+/target/
+/.audit-cache/
+/config.toml
+/state/
+/cache/
+/data/
+/imsearch/
+/imwebsearch/
+/html-dumps/
+/tmp/
+__pycache__/
