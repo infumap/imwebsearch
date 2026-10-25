@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::time::Instant;
 
-use super::config::FetchConfig;
+use super::config::{FetchConfig, MAX_PDF_BYTES, MAX_PDF_RESPONSE_BYTES, PDF_CACHE_MAX_BYTES};
 use super::http::Validators;
 use super::pdf::{NativeText, POLICY_VERSION};
 use crate::error::InfuResult;
@@ -167,17 +167,17 @@ impl PdfCache {
       return Ok(None);
     }
     let object = root.join("objects").join(name);
-    let Some(manifest) = read_limited(object.join("manifest.json"), self.config.max_pdf_response_bytes).await? else {
+    let Some(manifest) = read_limited(object.join("manifest.json"), MAX_PDF_RESPONSE_BYTES).await? else {
       return Ok(None);
     };
     let Ok(manifest) = serde_json::from_slice::<Manifest>(&manifest) else { return Ok(None) };
     if manifest.schema != 1 || manifest.policy != POLICY_VERSION || manifest.content_hash != hash {
       return Ok(None);
     }
-    let Some(markdown) = read_limited(object.join("text.md"), self.config.max_pdf_response_bytes).await? else {
+    let Some(markdown) = read_limited(object.join("text.md"), MAX_PDF_RESPONSE_BYTES).await? else {
       return Ok(None);
     };
-    let Some(pdf) = read_limited(object.join("document.pdf"), self.config.max_pdf_bytes).await? else {
+    let Some(pdf) = read_limited(object.join("document.pdf"), MAX_PDF_BYTES).await? else {
       return Ok(None);
     };
     let expected = hash.to_owned();
@@ -226,7 +226,7 @@ impl PdfCache {
     };
     let json = serde_json::to_vec(&manifest).map_err(|_| "Could not encode native PDF cache manifest.")?;
     let size = bytes.len() as u64 + text.markdown.len() as u64 + json.len() as u64;
-    if size > self.config.cache_max_bytes {
+    if size > PDF_CACHE_MAX_BYTES {
       return Ok(());
     }
     let _maintenance = lock_file(&root.join("locks/maintenance"), deadline).await?;
@@ -270,7 +270,7 @@ impl PdfCache {
     let mut count = objects.len() + 1;
     for (age, path, size) in objects {
       let expired = age.elapsed().unwrap_or_default() > self.config.cache_ttl;
-      if total <= self.config.cache_max_bytes && count <= 4096 && !expired {
+      if total <= PDF_CACHE_MAX_BYTES && count <= 4096 && !expired {
         continue;
       }
       if tokio::fs::remove_dir_all(path).await.is_ok() {
@@ -278,7 +278,7 @@ impl PdfCache {
         count -= 1;
       }
     }
-    if total > self.config.cache_max_bytes || count > 4096 {
+    if total > PDF_CACHE_MAX_BYTES || count > 4096 {
       return Err("Could not reclaim enough PDF cache space.".into());
     }
     // Every publisher holds the same maintenance lock through staging and

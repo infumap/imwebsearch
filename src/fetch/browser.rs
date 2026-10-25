@@ -23,7 +23,7 @@ use tokio::time::{Instant, timeout, timeout_at};
 
 use crate::error::InfuResult;
 
-use super::config::FetchConfig;
+use super::config::{FetchConfig, MAX_DOCUMENT_BYTES, MAX_PDF_BYTES, MAX_RENDERED_BYTES};
 use super::http::{DocumentKind, DownloadedDocument, Validators, classify};
 use super::isolation::Isolation;
 use super::policy::{assert_public_destination, check_subresource, http_status_error};
@@ -480,13 +480,11 @@ async fn render_page(
     .map_err(|error| format!("Could not intercept browser responses: {error}"))?;
   let (sender, mut documents) = mpsc::channel(8);
   let intercept_page = page.clone();
-  let config = config.clone();
-  let render_config = config.clone();
   let _interceptor = AbortTask(tokio::spawn(async move {
     let mut navigations = 0;
     while let Some(event) = events.next().await {
       let top = event.frame_id == frame && event.resource_type == network::ResourceType::Document;
-      let result = intercept(&intercept_page, &config, &event, top, &mut navigations).await;
+      let result = intercept(&intercept_page, &event, top, &mut navigations).await;
       match result {
         Ok(Some(document)) => {
           if sender.send(Ok(document)).await.is_err() {
@@ -534,7 +532,7 @@ async fn render_page(
   if first.kind() != DocumentKind::Html {
     return Ok(first);
   }
-  snapshot(&page, first, &render_config, &mut documents).await
+  snapshot(&page, first, config, &mut documents).await
 }
 
 /// Policy for a request the page itself makes: frames get the document check,
@@ -552,7 +550,6 @@ async fn check_subresource_request(url: &Url, document: bool) -> InfuResult<()> 
 
 async fn intercept(
   page: &Page,
-  config: &FetchConfig,
   event: &fetch::EventRequestPaused,
   top: bool,
   navigations: &mut usize,
@@ -613,7 +610,7 @@ async fn intercept(
     .find(|header| header.name.eq_ignore_ascii_case("content-type"))
     .map(|header| header.value.to_ascii_lowercase())
     .unwrap_or_default();
-  let body = read_body(page, event, &content_type, config).await?;
+  let body = read_body(page, event, &content_type).await?;
   let document = DownloadedDocument {
     final_url: url,
     content_type,
@@ -656,12 +653,7 @@ async fn intercept(
   Ok(Some(document))
 }
 
-async fn read_body(
-  page: &Page,
-  event: &fetch::EventRequestPaused,
-  content_type: &str,
-  config: &FetchConfig,
-) -> InfuResult<Vec<u8>> {
+async fn read_body(page: &Page, event: &fetch::EventRequestPaused, content_type: &str) -> InfuResult<Vec<u8>> {
   let stream = page
     .execute(fetch::TakeResponseBodyAsStreamParams::new(event.request_id.clone()))
     .await
@@ -681,11 +673,7 @@ async fn read_body(
       };
       let mut prefix = body[..body.len().min(1024)].to_vec();
       prefix.extend_from_slice(&bytes[..bytes.len().min(1024 - prefix.len())]);
-      let limit = if classify(content_type, &prefix) == DocumentKind::Pdf {
-        config.max_pdf_bytes
-      } else {
-        config.max_document_bytes
-      };
+      let limit = if classify(content_type, &prefix) == DocumentKind::Pdf { MAX_PDF_BYTES } else { MAX_DOCUMENT_BYTES };
       if bytes.len() > limit.saturating_sub(body.len()) {
         return Err("Browser response exceeds its byte limit.".into());
       }
@@ -797,7 +785,7 @@ async fn snapshot(
     }
     let expression = page_call(
       "imwebsearchCapture",
-      &serde_json::json!({ "limit": config.max_rendered_bytes, "dump": config.html_dump_dir.is_some() }).to_string(),
+      &serde_json::json!({ "limit": MAX_RENDERED_BYTES, "dump": config.html_dump_dir.is_some() }).to_string(),
     );
     let evaluation = match evaluate_document(page, expression).await {
       Ok(value) => value,

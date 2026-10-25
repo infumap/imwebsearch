@@ -40,7 +40,7 @@ use tokio::time::{Instant, timeout, timeout_at};
 use crate::duration::span;
 use crate::error::{InfuError, InfuResult};
 
-use super::config::FetchConfig;
+use super::config::{FetchConfig, MAX_PDF_BYTES, MAX_RENDERED_BYTES};
 use super::http::{DownloadedDocument, Validators, is_pdf};
 use super::policy::assert_public_destination;
 
@@ -56,7 +56,6 @@ const CONCURRENT_JOBS: usize = 2;
 pub(super) struct Relay {
   token: Option<String>,
   timeout: Duration,
-  max_rendered_bytes: usize,
   /// Zero when native PDF extraction is not configured.
   pdf_limit: usize,
   html_dump_dir: Option<std::path::PathBuf>,
@@ -155,8 +154,7 @@ impl Relay {
     Self {
       token: config.relay_token.clone(),
       timeout: config.relay_timeout,
-      max_rendered_bytes: config.max_rendered_bytes,
-      pdf_limit: if config.gpu_tools_url.is_some() { config.max_pdf_bytes } else { 0 },
+      pdf_limit: if config.gpu_tools_url.is_some() { MAX_PDF_BYTES } else { 0 },
       html_dump_dir: config.html_dump_dir.clone(),
       connection: StdMutex::new(None),
       slots: Semaphore::new(CONCURRENT_JOBS),
@@ -216,7 +214,7 @@ impl Relay {
       "id": id,
       "url": requested.as_str(),
       "timeout_ms": budget.as_millis() as u64,
-      "limit": self.max_rendered_bytes,
+      "limit": MAX_RENDERED_BYTES,
       "pdf_limit": self.pdf_limit,
       "dump": self.html_dump_dir.is_some(),
     });
@@ -255,7 +253,7 @@ impl Relay {
         return Err("Registered browser returned PDF chunks without a PDF result.".into());
       }
       let body = reply.body.ok_or("Registered browser returned no document.")?;
-      if body.len() > self.max_rendered_bytes {
+      if body.len() > MAX_RENDERED_BYTES {
         return Err("Rendered document exceeds its byte or complexity limit.".into());
       }
       if let (Some(directory), Some(raw)) = (self.html_dump_dir.clone(), reply.raw) {
@@ -317,7 +315,7 @@ impl Relay {
     S: futures_util::AsyncRead + futures_util::AsyncWrite + Unpin + Send + 'static,
   {
     // Allow a whole rendered document plus its optional raw dump and JSON escaping.
-    let limit = self.max_rendered_bytes.saturating_mul(if self.html_dump_dir.is_some() { 4 } else { 2 }) + (1 << 20);
+    let limit = MAX_RENDERED_BYTES.saturating_mul(if self.html_dump_dir.is_some() { 4 } else { 2 }) + (1 << 20);
     let config = WebSocketConfig::default().max_message_size(Some(limit)).max_frame_size(Some(limit));
     let socket = WebSocketStream::from_raw_socket(stream, Role::Server, Some(config)).await;
     let (mut sink, mut stream) = socket.split();

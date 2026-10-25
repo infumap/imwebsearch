@@ -68,7 +68,7 @@ The token and pages travel over unencrypted `ws://`, so do not expose the port p
 
 - PDF responses, including PDFs served as `application/octet-stream`, are captured
   without saving a download. Other file downloads are refused. PDFs must fit
-  `fetch.max_pdf_bytes` and the overall fetch deadline; no OCR is performed.
+  the 128 MiB PDF size limit and the overall fetch deadline; no OCR is performed.
 - Only challenge pages that `capture.js` recognizes wait for the user. Other bot
   walls arrive as HTTP errors or refusal pages and fail immediately.
 - Requests from relay tabs to literal private addresses and to `localhost`,

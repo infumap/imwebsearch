@@ -54,7 +54,7 @@ For security, suggest using a sandboxed browser. [Omarchy](https://omarchy.org/)
 Optional - for PDF text extraction:
 
 1. Run infumap's [GPU tools](https://github.com/infumap/infumap/tree/master/tools/gpu) service.
-2. Set `fetch.gpu_tools_url` in `config.toml` to its address (e.g. `http://127.0.0.1:8787`). Restart the server.
+2. Set `fetch.gpu_tools_url` in `config.toml`. Restart the server.
 
 ## Usage
 

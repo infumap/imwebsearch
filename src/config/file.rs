@@ -277,10 +277,6 @@ impl Default for BrowserRelayConfig {
 #[serde(default, deny_unknown_fields)]
 pub struct FetchSettings {
   pub timeout_secs: u64,
-  pub max_document_bytes: u64,
-  pub max_rendered_bytes: u64,
-  pub max_pdf_bytes: u64,
-  pub max_pdf_response_bytes: u64,
   pub gpu_tools_url: Option<String>,
   pub html_dumps_enabled: bool,
   pub pdf_cache: PdfCacheConfig,
@@ -288,16 +284,7 @@ pub struct FetchSettings {
 
 impl Default for FetchSettings {
   fn default() -> Self {
-    Self {
-      timeout_secs: 30,
-      max_document_bytes: 16 * 1024 * 1024,
-      max_rendered_bytes: 16 * 1024 * 1024,
-      max_pdf_bytes: 128 * 1024 * 1024,
-      max_pdf_response_bytes: 16 * 1024 * 1024,
-      gpu_tools_url: None,
-      html_dumps_enabled: false,
-      pdf_cache: PdfCacheConfig::default(),
-    }
+    Self { timeout_secs: 30, gpu_tools_url: None, html_dumps_enabled: false, pdf_cache: PdfCacheConfig::default() }
   }
 }
 
@@ -305,14 +292,13 @@ impl Default for FetchSettings {
 #[serde(default, deny_unknown_fields)]
 pub struct PdfCacheConfig {
   pub enabled: bool,
-  pub max_bytes: u64,
   pub ttl_secs: u64,
   pub refresh: bool,
 }
 
 impl Default for PdfCacheConfig {
   fn default() -> Self {
-    Self { enabled: true, max_bytes: 2 * 1024 * 1024 * 1024, ttl_secs: 86400, refresh: false }
+    Self { enabled: true, ttl_secs: 86400, refresh: false }
   }
 }
 
@@ -442,11 +428,6 @@ impl FileConfig {
     let fetch = &mut self.fetch;
     for (field, value, cap) in [
       ("fetch.timeout_secs", fetch.timeout_secs, 3600),
-      ("fetch.max_document_bytes", fetch.max_document_bytes, 16 * 1024 * 1024),
-      ("fetch.max_rendered_bytes", fetch.max_rendered_bytes, 16 * 1024 * 1024),
-      ("fetch.max_pdf_bytes", fetch.max_pdf_bytes, 128 * 1024 * 1024),
-      ("fetch.max_pdf_response_bytes", fetch.max_pdf_response_bytes, 32 * 1024 * 1024),
-      ("fetch.pdf_cache.max_bytes", fetch.pdf_cache.max_bytes, 16 * 1024 * 1024 * 1024),
       ("fetch.pdf_cache.ttl_secs", fetch.pdf_cache.ttl_secs, 30 * 86400),
     ] {
       if value == 0 || value > cap {

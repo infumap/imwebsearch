@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::InfuResult;
 
-use super::config::FetchConfig;
+use super::config::{FetchConfig, MAX_DOCUMENT_BYTES, MAX_PDF_BYTES};
 use super::policy::{document_addresses, http_status_error};
 
 struct PinnedResolver {
@@ -180,11 +180,8 @@ impl HttpDownloader {
         let chunk = chunk.map_err(|error| format!("Failed to read document: {error}"))?;
         let mut prefix = body[..body.len().min(1024)].to_vec();
         prefix.extend_from_slice(&chunk[..chunk.len().min(1024 - prefix.len())]);
-        let limit = if classify(&content_type, &prefix) == DocumentKind::Pdf {
-          self.config.max_pdf_bytes
-        } else {
-          self.config.max_document_bytes
-        };
+        let limit =
+          if classify(&content_type, &prefix) == DocumentKind::Pdf { MAX_PDF_BYTES } else { MAX_DOCUMENT_BYTES };
         if chunk.len() > limit.saturating_sub(body.len()) {
           return Err("Document exceeds its download byte limit.".into());
         }

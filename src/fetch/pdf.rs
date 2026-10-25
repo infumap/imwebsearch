@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 use tokio::time::{Instant, timeout_at};
 
 use super::cache::{PdfCache, Source, digest};
-use super::config::FetchConfig;
+use super::config::{FetchConfig, MAX_PDF_BYTES, MAX_PDF_RESPONSE_BYTES};
 use super::http::is_pdf;
 use crate::error::InfuResult;
 
@@ -181,7 +181,7 @@ impl PdfService {
     if !is_pdf(&bytes) {
       return Err("The response claims to be a PDF but has no PDF signature.".into());
     }
-    if bytes.len() > self.config.max_pdf_bytes {
+    if bytes.len() > MAX_PDF_BYTES {
       return Err("PDF exceeds its download byte limit.".into());
     }
     let client = Client::builder()
@@ -214,7 +214,7 @@ impl PdfService {
       .await
       .map_err(|_| "Native PDF service request failed or timed out.")?;
     let status = response.status();
-    let body = bounded_body(response, self.config.max_pdf_response_bytes).await?;
+    let body = bounded_body(response, MAX_PDF_RESPONSE_BYTES).await?;
     if !status.is_success() {
       if status.is_server_error() {
         self.readiness.store(2, Ordering::Relaxed);

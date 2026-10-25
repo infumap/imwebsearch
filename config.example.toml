@@ -170,10 +170,6 @@ timeout_secs = 55
 
 [fetch]
 timeout_secs = 30
-max_document_bytes = 16777216
-max_rendered_bytes = 16777216
-max_pdf_bytes = 134217728
-max_pdf_response_bytes = 16777216
 # Omit to leave native PDF extraction unavailable.
 # gpu_tools_url = "http://127.0.0.1:8787"
 # Save raw rendered HTML under data_dir/html-dumps/ when enabled.
@@ -181,6 +177,5 @@ html_dumps_enabled = false
 
 [fetch.pdf_cache]
 enabled = true
-max_bytes = 2147483648
 ttl_secs = 86400
 refresh = false
