@@ -73,6 +73,11 @@ pub(super) async fn assert_public_destination(url: &Url) -> InfuResult<()> {
   document_addresses(url).await.map(|_| ())
 }
 
+/// For search plugins, which may load search engine pages; every other rule applies.
+pub(super) async fn assert_public_address(url: &Url) -> InfuResult<()> {
+  public_addresses(url).await.map(|_| ())
+}
+
 pub(super) async fn document_addresses(url: &Url) -> InfuResult<Vec<SocketAddr>> {
   if let Some(host) = url.host_str()
     && is_search_engine_host(host)

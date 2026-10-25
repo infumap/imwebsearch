@@ -5,6 +5,8 @@
 //! MCP over stdio for search plugins; see PLUGINS.md. Each session owns one
 //! plugin process and its process group. Dropping an unfinished session kills
 //! the group at once; `finish` allows a short exit grace in the background.
+//! During a search, the plugin may ask imwebsearch to render a page in the
+//! browser relay.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -12,10 +14,15 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use log::info;
+use reqwest::Url;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout, Command};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
+
+use crate::error::InfuError;
+use crate::fetch::RenderError;
 
 use super::mcp::{initialize_params, matching_reply, negotiated_protocol, unexpected};
 use super::{ProviderError, ProviderErrorKind, ProviderResult};
@@ -24,6 +31,9 @@ const MAX_LINE_BYTES: usize = 2 * 1024 * 1024;
 const EXIT_GRACE: Duration = Duration::from_secs(1);
 const MAX_STDERR_LINES: usize = 64;
 const MAX_STDERR_LINE_CHARS: usize = 1000;
+const RENDER_METHOD: &str = "imwebsearch/render";
+/// Left for the plugin to use a rendered page before its attempt deadline.
+const RENDER_REPLY_MARGIN: Duration = Duration::from_secs(1);
 
 pub(crate) struct Session {
   name: &'static str,
@@ -35,16 +45,20 @@ pub(crate) struct Session {
   stdout: BufReader<ChildStdout>,
   stderr: Option<JoinHandle<()>>,
   next_id: u64,
+  /// The attempt deadline when the plugin may request relay renders.
+  render_until: Option<Instant>,
 }
 
 impl Session {
   /// Spawn the plugin with exactly the configured environment, then complete
-  /// MCP initialization. The caller bounds the whole session with a deadline.
+  /// MCP initialization. The caller bounds the whole session with a deadline,
+  /// passed as `render_until` when the plugin may request relay renders.
   pub(crate) async fn start(
     name: &'static str,
     program: &Path,
     args: &[String],
     env: &BTreeMap<String, String>,
+    render_until: Option<Instant>,
   ) -> ProviderResult<Self> {
     let mut command = Command::new(program);
     command
@@ -73,8 +87,13 @@ impl Session {
       stdout: BufReader::new(stdout),
       stderr: Some(log_stderr(name, pid, stderr)),
       next_id: 1,
+      render_until,
     };
-    let result = session.request("initialize", initialize_params()).await?;
+    let mut params = initialize_params();
+    if render_until.is_some() && crate::fetch::relay_configured() {
+      params["capabilities"]["experimental"] = json!({ RENDER_METHOD: {} });
+    }
+    let result = session.request("initialize", params).await?;
     negotiated_protocol(&result)?;
     session.send(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })).await?;
     Ok(session)
@@ -90,10 +109,9 @@ impl Session {
       let message = self.read_message().await?;
       if let Some(method) = message.get("method") {
         if let Some(request_id) = message.get("id") {
-          let reply = if method.as_str() == Some("ping") {
-            json!({ "jsonrpc": "2.0", "id": request_id, "result": {} })
-          } else {
-            json!({ "jsonrpc": "2.0", "id": request_id, "error": { "code": -32601, "message": "Method not found." } })
+          let reply = match self.answer(method.as_str(), message.get("params")).await {
+            Ok(result) => json!({ "jsonrpc": "2.0", "id": request_id, "result": result }),
+            Err(error) => json!({ "jsonrpc": "2.0", "id": request_id, "error": error }),
           };
           self.send(&reply).await?;
         }
@@ -101,6 +119,56 @@ impl Session {
       }
       if let Some(result) = matching_reply(message, id, |_| None)? {
         return Ok(result);
+      }
+    }
+  }
+
+  async fn answer(&self, method: Option<&str>, params: Option<&Value>) -> Result<Value, Value> {
+    match (method, self.render_until) {
+      (Some("ping"), _) => Ok(json!({})),
+      (Some(RENDER_METHOD), Some(until)) => self.render(params.unwrap_or(&Value::Null), until).await,
+      _ => Err(json!({ "code": -32601, "message": "Method not found." })),
+    }
+  }
+
+  /// Bounded by the attempt deadline less a reply margin, or sooner by the
+  /// plugin's `timeout_ms`. Only the host is logged: the URL may hold a query.
+  async fn render(&self, params: &Value, until: Instant) -> Result<Value, Value> {
+    let invalid = || json!({ "code": -32602, "message": "Expected an http or https url and an optional timeout_ms." });
+    let url = params
+      .get("url")
+      .and_then(Value::as_str)
+      .and_then(|url| Url::parse(url).ok())
+      .filter(|url| matches!(url.scheme(), "http" | "https"))
+      .ok_or_else(invalid)?;
+    let mut deadline = until.checked_sub(RENDER_REPLY_MARGIN).unwrap_or(until);
+    match params.get("timeout_ms") {
+      None | Some(Value::Null) => {}
+      Some(timeout) => {
+        let timeout = Duration::from_millis(timeout.as_u64().ok_or_else(invalid)?);
+        deadline = deadline.min(Instant::now() + timeout);
+      }
+    }
+    let host = url.host_str().unwrap_or_default().to_owned();
+    match crate::fetch::render_in_relay(&url, deadline).await {
+      Ok((final_url, html)) => {
+        info!("[plugin {} {}] Relay rendered a page from {host}.", self.name, self.pid);
+        Ok(json!({ "url": final_url.as_str(), "html": html }))
+      }
+      Err(error) => {
+        let (reason, status) = match &error {
+          RenderError::Unavailable => ("unavailable", None),
+          RenderError::Timeout(_) => ("timeout", None),
+          RenderError::Challenge => ("challenge", None),
+          RenderError::Other(error) => ("failed", error.http_status()),
+        };
+        let message = InfuError::from(error).to_string();
+        info!("[plugin {} {}] Relay render from {host} failed: {message}", self.name, self.pid);
+        let mut data = json!({ "reason": reason });
+        if let Some(status) = status {
+          data["status"] = json!(status);
+        }
+        Err(json!({ "code": -32001, "message": message, "data": data }))
       }
     }
   }
@@ -229,7 +297,7 @@ mod tests {
   async fn start(body: &str, env: &[(&str, &str)]) -> ProviderResult<Session> {
     let args = ["-c".to_owned(), format!("{HANDSHAKE}{body}")];
     let env = env.iter().map(|&(name, value)| (name.to_owned(), value.to_owned())).collect();
-    Session::start("test", Path::new("/bin/sh"), &args, &env).await
+    Session::start("test", Path::new("/bin/sh"), &args, &env, None).await
   }
 
   async fn request(body: &str) -> ProviderResult<Value> {
@@ -274,6 +342,33 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn answers_render_requests_only_during_searches() {
+    // Echo the replies to a valid and an invalid render request.
+    let script = format!(
+      "{HANDSHAKE}read -r _; printf '%s\\n' \
+       '{{\"jsonrpc\":\"2.0\",\"id\":\"r1\",\"method\":\"imwebsearch/render\",\"params\":{{\"url\":\"https://example.com/\"}}}}' \
+       '{{\"jsonrpc\":\"2.0\",\"id\":\"r2\",\"method\":\"imwebsearch/render\",\"params\":{{\"url\":\"file:///etc/passwd\"}}}}'; \
+       read -r valid; read -r invalid; \
+       printf '{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"valid\":%s,\"invalid\":%s}}}}\\n' \"$valid\" \"$invalid\""
+    );
+    let args = ["-c".to_owned(), script];
+    for (render_until, valid_code, invalid_code) in
+      [(Some(Instant::now() + Duration::from_secs(20)), -32001, -32602), (None, -32601, -32601)]
+    {
+      let mut session =
+        Session::start("test", Path::new("/bin/sh"), &args, &BTreeMap::new(), render_until).await.unwrap();
+      let result = session.request("tools/call", json!({})).await.unwrap();
+      session.finish();
+      assert_eq!(result["valid"]["error"]["code"], valid_code);
+      assert_eq!(result["invalid"]["error"]["code"], invalid_code);
+      if render_until.is_some() {
+        // Web fetch is not initialized here, so no relay browser is available.
+        assert_eq!(result["valid"]["error"]["data"]["reason"], "unavailable");
+      }
+    }
+  }
+
+  #[tokio::test]
   async fn plugin_receives_only_configured_environment() {
     let mut session = start(
       "read -r _; printf '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"key\":\"%s\",\"home\":\"%s\",\"cwd\":\"%s\"}}\\n' \
@@ -308,9 +403,9 @@ mod tests {
   async fn process_failures_are_transient() {
     assert_eq!(request("read -r _; exit 3").await.unwrap_err().kind, ProviderErrorKind::Transient);
     let args = ["-c".to_owned(), "exit 0".to_owned()];
-    let early = Session::start("test", Path::new("/bin/sh"), &args, &BTreeMap::new()).await;
+    let early = Session::start("test", Path::new("/bin/sh"), &args, &BTreeMap::new(), None).await;
     assert_eq!(early.err().unwrap().kind, ProviderErrorKind::Transient);
-    let missing = Session::start("test", Path::new("/nonexistent/plugin"), &[], &BTreeMap::new()).await;
+    let missing = Session::start("test", Path::new("/nonexistent/plugin"), &[], &BTreeMap::new(), None).await;
     assert_eq!(missing.err().unwrap().kind, ProviderErrorKind::Transient);
   }
 

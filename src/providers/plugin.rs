@@ -59,7 +59,8 @@ impl PluginProvider {
       Ok(Ok(permit)) => permit,
       _ => return Err(ProviderError::new(ProviderErrorKind::Transient, "Search plugin process limit was reached.")),
     };
-    let mut session = Session::start(self.spec.name, program, &self.plugin.args, &self.plugin.env).await?;
+    let mut session =
+      Session::start(self.spec.name, program, &self.plugin.args, &self.plugin.env, Some(deadline)).await?;
     // Charge only the search, durably before dispatch. A cancelled or uncertain
     // call is never replayed, and retains its local charge.
     if let Some(quota) = &self.quota {

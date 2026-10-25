@@ -120,7 +120,11 @@ additional boundary; Chrome's own sandbox remains required on both platforms.
    before passing bytes to the same native extraction service and cache. A PDF
    response does not switch to the owned headless browser. Cancellation or expiry
    detaches response capture and closes the job tab; a pending verification
-   challenge is left open as before.
+   challenge is left open as before. A search plugin may also have the relay
+   browser render a page during a search (`imwebsearch/render`, see
+   [PLUGINS.md](PLUGINS.md)). Those requests may load search engine pages, which
+   `fetch_page` refuses; the requested and final URLs otherwise get the same
+   checks, and they never use the owned headless browser.
 
 Host configuration can prevent a confined browser from starting, particularly
 when user namespaces are restricted. The server does not install privileged

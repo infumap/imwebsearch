@@ -42,7 +42,7 @@ use crate::error::{InfuError, InfuResult};
 
 use super::config::{FetchConfig, MAX_PDF_BYTES, MAX_RENDERED_BYTES};
 use super::http::{DownloadedDocument, Validators, is_pdf};
-use super::policy::assert_public_destination;
+use super::policy::{assert_public_address, assert_public_destination};
 
 /// Bumped when the message format changes; the extension must match.
 const PROTOCOL_VERSION: u64 = 2;
@@ -195,14 +195,19 @@ impl Relay {
     }
   }
 
-  /// Render a page in the registered browser.
-  pub async fn render(&self, requested: &Url, deadline: Instant) -> InfuResult<DownloadedDocument> {
+  /// Render a page in the registered browser. Search plugins may render search
+  /// engine pages, which `fetch_page` refuses.
+  pub async fn render(
+    &self,
+    requested: &Url,
+    deadline: Instant,
+    search_engines_allowed: bool,
+  ) -> Result<DownloadedDocument, RenderError> {
     let _permit = timeout_at(deadline, self.slots.acquire())
       .await
-      .map_err(|_| "Browser relay deadline expired while queued.")?
+      .map_err(|_| RenderError::Timeout("Browser relay deadline expired while queued."))?
       .map_err(|_| "Browser relay is shutting down.")?;
-    let connection =
-      self.connection.lock().expect("Relay lock poisoned").clone().ok_or("No browser is connected to the relay.")?;
+    let connection = self.connection.lock().expect("Relay lock poisoned").clone().ok_or(RenderError::Unavailable)?;
     let id = self.next_id.fetch_add(1, Ordering::Relaxed);
     let (sender, receiver) = oneshot::channel();
     connection.pending.lock().expect("Relay lock poisoned").insert(id, PendingReply { sender, pdf_body: Vec::new() });
@@ -221,28 +226,28 @@ impl Relay {
     connection.outgoing.send(Message::text(message.to_string())).map_err(|_| "Browser relay disconnected.")?;
     let reply = timeout_at(deadline, receiver)
       .await
-      .map_err(|_| "The registered browser did not return the page before the deadline.")?
+      .map_err(|_| RenderError::Timeout("The registered browser did not return the page before the deadline."))?
       .map_err(|_| "The registered browser disconnected during the fetch.")?;
     job.finish();
     if reply.verification_pending {
-      return Err(
-        "The site is showing a human verification challenge in the registered browser. Its tab has been left open \
-         for the user; once they complete it, retry this fetch."
-          .into(),
-      );
+      return Err(RenderError::Challenge);
     }
     if let Some(status) = reply.status {
-      return Err(InfuError::from_http_status(status));
+      return Err(InfuError::from_http_status(status).into());
     }
     if let Some(error) = reply.error {
-      return Err(format!("Registered browser: {error}").into());
+      return Err(InfuError::from(format!("Registered browser: {error}")).into());
     }
     let final_url = Url::parse(reply.url.as_deref().ok_or("Registered browser returned no final URL.")?)
       .map_err(|_| "Registered browser returned an invalid final URL.")?;
-    assert_public_destination(&final_url).await?;
+    if search_engines_allowed {
+      assert_public_address(&final_url).await?;
+    } else {
+      assert_public_destination(&final_url).await?;
+    }
     let (body, content_type) = if reply.pdf {
       if self.pdf_limit == 0 {
-        return Err(super::pdf::UNSUPPORTED.into());
+        return Err(InfuError::from(super::pdf::UNSUPPORTED).into());
       }
       if reply.pdf_size != Some(reply.pdf_body.len()) || !is_pdf(&reply.pdf_body) {
         return Err("Registered browser returned an incomplete or invalid PDF.".into());
@@ -466,6 +471,40 @@ impl Drop for PendingJob<'_> {
     }
     self.connection.pending.lock().expect("Relay lock poisoned").remove(&self.id);
     let _ = self.connection.outgoing.send(Message::text(json!({ "type": "cancel", "id": self.id }).to_string()));
+  }
+}
+
+/// Failures a search plugin acts on differently; the rest are `Other`.
+pub(crate) enum RenderError {
+  Unavailable,
+  Timeout(&'static str),
+  /// The tab is left open for the user to complete it.
+  Challenge,
+  Other(InfuError),
+}
+
+impl From<InfuError> for RenderError {
+  fn from(error: InfuError) -> Self {
+    Self::Other(error)
+  }
+}
+
+impl From<&str> for RenderError {
+  fn from(message: &str) -> Self {
+    Self::Other(message.into())
+  }
+}
+
+impl From<RenderError> for InfuError {
+  fn from(error: RenderError) -> Self {
+    match error {
+      RenderError::Unavailable => "No browser is connected to the relay.".into(),
+      RenderError::Timeout(message) => message.into(),
+      RenderError::Challenge => "The site is showing a human verification challenge in the registered browser. Its \
+                                 tab has been left open for the user; once they complete it, retry this fetch."
+        .into(),
+      RenderError::Other(error) => error,
+    }
   }
 }
 

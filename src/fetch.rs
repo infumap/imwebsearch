@@ -30,6 +30,7 @@ use browser::BrowserRenderer;
 use config::FetchConfig;
 use http::{DocumentKind, DownloadedDocument, HttpDownloader};
 use policy::{assert_public_destination, hosts_differ, normalize_url_scheme};
+pub(crate) use relay::RenderError;
 
 pub const DEFAULT_MAX_CHARS: usize = 8_000;
 pub const MAX_CHARS_CAP: usize = 100_000;
@@ -151,7 +152,7 @@ impl FetchState {
     if !self.relay.connected() {
       return self.browser.render(requested, deadline).await;
     }
-    self.relay.render(requested, deadline).await
+    self.relay.render(requested, deadline, false).await.map_err(Into::into)
   }
 
   /// The whole extracted text; `pages::chunk` slices it for the response.
@@ -214,6 +215,28 @@ pub fn accept_relay<B>(req: hyper::Request<B>) -> hyper::Response<http_body_util
       .body(http_body_util::Full::new(bytes::Bytes::from_static(b"Web fetch is unavailable.")))
       .expect("Static response is valid"),
   }
+}
+
+/// Whether a relay browser may connect, for search plugins to know up front.
+pub fn relay_configured() -> bool {
+  FETCH_STATE.get().is_some_and(|state| state.as_ref().is_ok_and(|state| state.relay.enabled()))
+}
+
+/// Render an http or https page in the relay browser for a search plugin, never
+/// in the owned headless browser. Search engine pages are allowed. Returns the final URL and the captured HTML:
+/// the page's DOM with links made absolute and consent banners removed.
+pub(crate) async fn render_in_relay(requested: &Url, deadline: Instant) -> Result<(Url, String), RenderError> {
+  let Some(Ok(state)) = FETCH_STATE.get() else { return Err(RenderError::Unavailable) };
+  if !state.relay.connected() {
+    return Err(RenderError::Unavailable);
+  }
+  policy::assert_public_address(requested).await?;
+  let document = state.relay.render(requested, deadline, true).await?;
+  if document.kind() != DocumentKind::Html {
+    return Err("The rendered page is not an HTML document.".into());
+  }
+  let html = String::from_utf8(document.body).map_err(|_| "The rendered page is not valid UTF-8.")?;
+  Ok((document.final_url, html))
 }
 
 pub async fn shutdown() {

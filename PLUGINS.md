@@ -59,14 +59,17 @@ not sandboxed and is not covered by [NETWORK_POLICY.md](NETWORK_POLICY.md).
 
 - JSON-RPC 2.0, UTF-8, one message per line, terminated by `\n`. Messages must
   not contain embedded newlines. Batches are not supported.
-- Each line is at most 2 MiB.
+- Each line from the plugin is at most 2 MiB. A line from imwebsearch carrying a
+  rendered page can be up to 16 MiB.
 - stdout must carry only protocol messages. Any other output on stdout fails the
   attempt as `unexpected_response`. Log to stderr.
 - imwebsearch requests protocol version `2025-06-18`. The plugin may answer
   `2025-03-26`, `2025-06-18` or `2025-11-25`, and must advertise the `tools`
   capability.
-- imwebsearch answers `ping` requests from the plugin, answers any other plugin
-  request with error `-32601`, and ignores notifications from the plugin.
+- Either side may send requests. imwebsearch answers `ping` and, during a
+  search, [`imwebsearch/render`](#rendering-pages-in-the-browser-relay). It
+  answers any other plugin request with error `-32601`, and ignores
+  notifications from the plugin.
 
 ## Declaring providers
 
@@ -200,7 +203,9 @@ cooldown:
 | `invalid_credentials` | The configured credentials were rejected. | Provider disabled until imwebsearch restarts. `retry_after_secs` is ignored. |
 | `invalid_request` | The upstream rejected this particular query. | No cooldown; the next query may be accepted. `retry_after_secs` is ignored. |
 
-Cooldowns of 60 seconds or more persist across restarts.
+`rate_limited` and `quota_exhausted` cooldowns, and `blocked` cooldowns of at
+least 24 hours, persist across restarts. Other cooldowns last only until
+imwebsearch restarts.
 
 Other failures:
 
@@ -209,6 +214,67 @@ Other failures:
   error is treated as `unexpected_response`.
 - Failure to start, exiting before replying, invalid framing and exceeding the
   deadline are treated as `transient`. They never disable a provider.
+
+## Rendering pages in the browser relay
+
+While handling a `tools/call`, before replying to it, a plugin may ask
+imwebsearch to load a page in the browser connected to the browser relay (see
+the README) and return its HTML. The page loads in a real browser profile, so
+sites that block plain HTTP clients or headless browsers may answer normally.
+Only the relay browser is used; imwebsearch never falls back to its own
+headless browser for this.
+
+imwebsearch lists the method in its `initialize` capabilities when the relay is
+configured (`browser_relay.token` is set):
+
+```json
+"capabilities": { "experimental": { "imwebsearch/render": {} } }
+```
+
+The request:
+
+```json
+{ "jsonrpc": "2.0", "id": "r1", "method": "imwebsearch/render",
+  "params": { "url": "https://example.com/search?q=rust", "timeout_ms": 12000 } }
+```
+
+- `url` is an `http` or `https` URL. It is loaded with a GET request and must
+  pass the same public-destination checks as `fetch_page`.
+- `timeout_ms` (optional) limits how long imwebsearch waits for the page. The
+  wait never extends past the attempt deadline, less one second for the plugin
+  to reply. Without it, a verification challenge would hold the attempt until
+  its deadline.
+- Use request ids that cannot be confused with imwebsearch's, such as strings.
+  While it waits for the reply, the plugin must read its stdin, which carries
+  the response.
+
+The result:
+
+```json
+{ "jsonrpc": "2.0", "id": "r1",
+  "result": { "url": "https://example.com/search?q=rust", "html": "<html>…</html>" } }
+```
+
+`url` is the final URL after redirects. `html` is the rendered DOM as the relay
+extension captures it, not the original response: links are absolute and
+consent banners are removed. Element classes and structure are kept.
+
+A failure is a JSON-RPC error with code `-32001` and `data.reason`:
+
+| `reason` | Meaning | Suggested handling |
+| --- | --- | --- |
+| `unavailable` | No browser is connected to the relay. | Fail over, or report `transient` with a `retry_after_secs`. |
+| `challenge` | The page showed a verification challenge. Its tab is left open for the user to complete. | Report `blocked` with a short `retry_after_secs`. |
+| `timeout` | The page did not finish loading in time. | Report `transient`. |
+| `failed` | Any other failure. `data.status` holds the HTTP status when the page returned an error status. | Map the status as for a direct request; otherwise report `transient`. |
+
+Invalid parameters get error `-32602`. Without a configured relay the request
+fails with `unavailable`. During discovery, and from imwebsearch versions
+without this method, it gets `-32601`; treat that like `unavailable`.
+
+The relay browser renders a few pages at once, shared with `fetch_page`, and
+shows each page in a tab. Declare `max_concurrent` and a modest
+`requests_per_minute` for providers that use it.
 
 ## Example exchange
 

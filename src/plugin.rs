@@ -156,7 +156,7 @@ async fn declared_tools(command: &Path, plugin: &PluginConfig) -> Result<Vec<Val
   use crate::providers::mcp_stdio::Session;
 
   check_executable(command)?;
-  let mut session = Session::start("discovery", command, &plugin.args, &plugin.env).await.map_err(describe)?;
+  let mut session = Session::start("discovery", command, &plugin.args, &plugin.env, None).await.map_err(describe)?;
   let result = session.request("tools/list", serde_json::json!({})).await;
   session.finish();
   match result.map_err(describe)?.get_mut("tools").map(Value::take) {
