@@ -47,7 +47,7 @@ Optional - for fetching pages through your browser and manual handling of verifi
 2. In a dedicated Chrome profile, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select this repo's `extension/` directory.
 3. Open the extension popup. Enter `ws://127.0.0.1:8791/browser-relay` and the same token, tick **Connect**, then **Save**.
 
-For security, we recommend using a sandboxed browser. [Omarchy](https://omarchy.org/), which comes with Chrome pre-installed, is a good option for this.
+For security, we recommend using a sandboxed browser. [Omarchy](https://omarchy.org/), which comes with Chromium pre-installed, is a good option for this.
 
 ### GPU tools
 
