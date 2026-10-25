@@ -166,7 +166,8 @@ async fn run_server(settings: &'static config::file::FileConfig) {
     eprintln!("Could not initialize search providers: {error}");
     std::process::exit(1);
   }
-  let providers = config.provider_preference();
+  let mut providers = config.provider_preference();
+  providers.extend(plugin::providers().iter().map(|provider| provider.name));
   if providers.is_empty() {
     warn!("No general search providers configured; web_search can only serve fallback source pools.");
   } else {

@@ -8,11 +8,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use log::{error, info, warn};
-use serde_json::Value;
+use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use crate::config::file::{PluginConfig, PluginProviderConfig, ProviderTier};
 
@@ -52,7 +53,17 @@ const METADATA_KEY: &str = "imwebsearch/provider";
 const DISCOVERY_DEADLINE: Duration = Duration::from_secs(10);
 const DEFAULT_ROUTING_REQUESTS_PER_DAY: u32 = 100;
 
-static PROVIDERS: OnceLock<Vec<ProviderSpec>> = OnceLock::new();
+static DISCOVERY: OnceLock<Discovery> = OnceLock::new();
+
+/// Set once at startup when a plugin is configured, whatever the outcome.
+struct Discovery {
+  providers: Vec<ProviderSpec>,
+  disabled: Vec<&'static str>,
+  error: Option<String>,
+  /// Shared by every provider of the plugin.
+  processes: Arc<Semaphore>,
+  max_processes: u32,
+}
 
 /// Plugin-declared metadata after operator overrides.
 pub struct ProviderSpec {
@@ -80,29 +91,54 @@ pub fn check_provider_name(name: &str) -> Result<(), &'static str> {
 }
 
 /// Empty unless discovery succeeded.
-#[expect(dead_code, reason = "Plugin providers are registered with the search router next.")]
 pub fn providers() -> &'static [ProviderSpec] {
-  PROVIDERS.get().map_or(&[], Vec::as_slice)
+  DISCOVERY.get().map_or(&[], |discovery| discovery.providers.as_slice())
+}
+
+/// Declared providers that configuration disables.
+pub fn disabled_providers() -> &'static [&'static str] {
+  DISCOVERY.get().map_or(&[], |discovery| discovery.disabled.as_slice())
+}
+
+pub fn tier(name: &str) -> Option<u32> {
+  providers().iter().find(|provider| provider.name == name).map(|provider| provider.tier)
+}
+
+pub fn processes() -> Option<&'static Arc<Semaphore>> {
+  DISCOVERY.get().map(|discovery| &discovery.processes)
+}
+
+/// Local state only; never contacts the plugin.
+pub fn readiness() -> Value {
+  let Some(discovery) = DISCOVERY.get() else { return json!({ "configured": false }) };
+  let names: Vec<&str> = discovery.providers.iter().map(|provider| provider.name).collect();
+  json!({
+    "configured": true,
+    "state": if discovery.error.is_some() { "failed" } else { "ready" },
+    "error": discovery.error,
+    "providers": names,
+    "disabled_providers": discovery.disabled,
+    "max_processes": discovery.max_processes,
+    "running_processes": (discovery.max_processes as usize).saturating_sub(discovery.processes.available_permits()),
+  })
 }
 
 /// Run once at startup, before search providers are registered. Failure only
 /// leaves plugin providers out; built-in search is unaffected.
 pub async fn discover(plugin: &PluginConfig) {
   let Some(command) = &plugin.command else { return };
-  let providers = match tokio::time::timeout(DISCOVERY_DEADLINE, declared_tools(command, plugin)).await {
-    Ok(Ok(tools)) => providers_from(&tools, &plugin.providers),
-    Ok(Err(message)) => {
-      error!("Search plugin discovery failed: {message} No plugin providers are registered.");
-      Vec::new()
-    }
-    Err(_) => {
-      error!(
-        "Search plugin discovery exceeded {}s. No plugin providers are registered.",
-        DISCOVERY_DEADLINE.as_secs()
-      );
-      Vec::new()
-    }
-  };
+  let (providers, disabled, failure) =
+    match tokio::time::timeout(DISCOVERY_DEADLINE, declared_tools(command, plugin)).await {
+      Ok(Ok(tools)) => {
+        let (providers, disabled) = providers_from(&tools, &plugin.providers);
+        (providers, disabled, None)
+      }
+      Ok(Err(message)) => (Vec::new(), Vec::new(), Some(message)),
+      Err(_) => (Vec::new(), Vec::new(), Some(format!("Discovery exceeded {}s.", DISCOVERY_DEADLINE.as_secs()))),
+    };
+  if let Some(message) = &failure {
+    error!("Search plugin discovery failed: {message} No plugin providers are registered.");
+  }
   for provider in &providers {
     info!(
       "Search plugin provider {}: tier={}, requests_per_minute={}, max_concurrent={}, min_interval_ms={}, \
@@ -116,7 +152,14 @@ pub async fn discover(plugin: &PluginConfig) {
       provider.routing_requests_per_day
     );
   }
-  if PROVIDERS.set(providers).is_err() {
+  let discovery = Discovery {
+    providers,
+    disabled,
+    error: failure,
+    processes: Arc::new(Semaphore::new(plugin.max_processes as usize)),
+    max_processes: plugin.max_processes,
+  };
+  if DISCOVERY.set(discovery).is_err() {
     warn!("Search plugin discovery ran more than once; keeping the first result.");
   }
 }
@@ -169,11 +212,16 @@ fn describe(error: crate::providers::ProviderError) -> String {
   }
 }
 
-/// Tools without provider metadata are ignored. Invalid declarations are
-/// logged and skipped, so the remaining providers still register.
-fn providers_from(tools: &[Value], overrides: &BTreeMap<String, PluginProviderConfig>) -> Vec<ProviderSpec> {
+/// Returns registered and disabled providers. Tools without provider metadata
+/// are ignored. Invalid declarations are logged and skipped, so the remaining
+/// providers still register.
+fn providers_from(
+  tools: &[Value],
+  overrides: &BTreeMap<String, PluginProviderConfig>,
+) -> (Vec<ProviderSpec>, Vec<&'static str>) {
   let defaults = PluginProviderConfig::default();
   let mut providers = Vec::new();
+  let mut disabled = Vec::new();
   let mut declared = BTreeSet::new();
   for tool in tools {
     let Some(metadata) = tool.get("_meta").and_then(|meta| meta.get(METADATA_KEY)) else { continue };
@@ -192,6 +240,7 @@ fn providers_from(tools: &[Value], overrides: &BTreeMap<String, PluginProviderCo
     let config = overrides.get(name).unwrap_or(&defaults);
     if !config.enabled {
       info!("Search plugin provider {name} is disabled by configuration.");
+      disabled.push(&*Box::leak(name.to_owned().into_boxed_str()));
       continue;
     }
     if providers.len() == MAX_PROVIDERS {
@@ -206,7 +255,7 @@ fn providers_from(tools: &[Value], overrides: &BTreeMap<String, PluginProviderCo
   for name in overrides.keys().filter(|name| !declared.contains(name.as_str())) {
     warn!("plugin.providers.{name} matches no provider the plugin declares.");
   }
-  providers
+  (providers, disabled)
 }
 
 /// Declared values are validated even where the operator overrides them.
@@ -283,7 +332,7 @@ mod tests {
       "version": 1, "tier": 3, "requests_per_minute": 5, "max_concurrent": 2, "min_interval_ms": 1500,
       "daily_quota": 200, "unknown": true
     });
-    let providers = providers_from(
+    let (providers, _) = providers_from(
       &[tool("acme_a", minimal), tool("acme_b", full), json!({ "name": "general_tool", "inputSchema": {} })],
       &BTreeMap::new(),
     );
@@ -291,7 +340,10 @@ mod tests {
     let (a, b) = (&providers[0], &providers[1]);
     assert_eq!((a.tier, a.requests_per_minute.get(), a.max_concurrent, a.daily_quota), (2, 10, None, None));
     assert_eq!((a.min_interval, a.routing_requests_per_day), (Duration::ZERO, DEFAULT_ROUTING_REQUESTS_PER_DAY));
-    assert_eq!((b.tier, b.max_concurrent.map(NonZeroU32::get), b.min_interval), (3, Some(2), Duration::from_millis(1500)));
+    assert_eq!(
+      (b.tier, b.max_concurrent.map(NonZeroU32::get), b.min_interval),
+      (3, Some(2), Duration::from_millis(1500))
+    );
     // The routing target follows the daily quota unless declared.
     assert_eq!((b.daily_quota, b.routing_requests_per_day), (Some(200), 200));
   }
@@ -306,7 +358,7 @@ mod tests {
     };
     let mut without_tier = valid.clone();
     without_tier.as_object_mut().unwrap().remove("tier");
-    let providers = providers_from(
+    let (providers, _) = providers_from(
       &[
         tool("ok", valid.clone()),
         tool("ok", valid.clone()),
@@ -328,17 +380,20 @@ mod tests {
   #[test]
   fn overrides_replace_declared_metadata() {
     let metadata = json!({ "version": 1, "tier": 1, "requests_per_minute": 10, "daily_quota": 50 });
-    let providers = providers_from(
+    let (providers, disabled) = providers_from(
       &[tool("acme_a", metadata.clone()), tool("acme_b", metadata)],
       &overrides(
         "[acme_a]\ntier = 4\nrequests_per_minute = 2\nmax_concurrent = 1\nmin_interval_ms = 10\ndaily_quota = 20\n\
          [acme_b]\nenabled = false\n[missing]\ntier = 2\n",
       ),
     );
-    assert_eq!(names(&providers), ["acme_a"]);
+    assert_eq!((names(&providers), disabled), (vec!["acme_a"], vec!["acme_b"]));
     let provider = &providers[0];
     assert_eq!((provider.tier, provider.requests_per_minute.get()), (4, 2));
-    assert_eq!((provider.max_concurrent.map(NonZeroU32::get), provider.min_interval), (Some(1), Duration::from_millis(10)));
+    assert_eq!(
+      (provider.max_concurrent.map(NonZeroU32::get), provider.min_interval),
+      (Some(1), Duration::from_millis(10))
+    );
     assert_eq!((provider.daily_quota, provider.routing_requests_per_day), (Some(20), 20));
   }
 
@@ -346,7 +401,8 @@ mod tests {
   fn registers_at_most_the_provider_limit() {
     let metadata = json!({ "version": 1, "tier": 1, "requests_per_minute": 1 });
     let tools: Vec<_> = (0..MAX_PROVIDERS + 2).map(|index| tool(&format!("p{index}"), metadata.clone())).collect();
-    assert_eq!(providers_from(&tools, &overrides("[p0]\nenabled = false\n")).len(), MAX_PROVIDERS);
+    let (providers, disabled) = providers_from(&tools, &overrides("[p0]\nenabled = false\n"));
+    assert_eq!((providers.len(), disabled), (MAX_PROVIDERS, vec!["p0"]));
   }
 
   #[cfg(unix)]
@@ -383,7 +439,7 @@ mod tests {
        '{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"name\":\"acme\",\"_meta\":{\"imwebsearch/provider\":{\"version\":1,\"tier\":2,\"requests_per_minute\":3}}}]}}'",
     );
     let tools = declared_tools(Path::new("/bin/sh"), &plugin).await.unwrap();
-    assert_eq!(names(&providers_from(&tools, &BTreeMap::new())), ["acme"]);
+    assert_eq!(names(&providers_from(&tools, &BTreeMap::new()).0), ["acme"]);
   }
 
   #[cfg(unix)]

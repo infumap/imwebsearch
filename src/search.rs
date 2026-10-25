@@ -31,6 +31,8 @@ use crate::providers::firecrawl_mcp::{self, FirecrawlMcp};
 use crate::providers::hacker_news::HackerNews;
 use crate::providers::parallel::{self, Parallel};
 use crate::providers::parallel_mcp::{self, ParallelMcp};
+#[cfg(unix)]
+use crate::providers::plugin::PluginProvider;
 use crate::providers::purili::{self, Purili};
 use crate::providers::serpapi::{self, SerpApi};
 use crate::providers::tavily::{self, Tavily};
@@ -203,6 +205,22 @@ static ROUTER: Lazy<InfuResult<SearchRouter>> = Lazy::new(|| {
       routing_requests_per_day: purili::ASSUMED_REQUESTS_PER_DAY,
     });
   }
+  #[cfg(unix)]
+  if let Some(processes) = crate::plugin::processes() {
+    let plugin = &config::file::current()?.plugin;
+    let directory = config.state_dir.as_ref().ok_or("Quota state directory is not configured.")?;
+    for spec in crate::plugin::providers() {
+      // A plugin provider must never prevent built-in search from starting.
+      match PluginProvider::new(spec, plugin, Arc::clone(processes), directory) {
+        Ok(provider) => providers.push(Backend::Unmetered {
+          provider: Box::new(provider),
+          requests_per_minute: Some(spec.requests_per_minute),
+          routing_requests_per_day: spec.routing_requests_per_day,
+        }),
+        Err(error) => warn!("Search plugin provider {} skipped: could not initialize: {error}", spec.name),
+      }
+    }
+  }
   search_router(providers)
 });
 
@@ -230,8 +248,7 @@ fn search_router(backends: Vec<Backend>) -> InfuResult<SearchRouter> {
   let config = config::search_config().map_err(|message| format!("Invalid web-search configuration: {message}"))?;
   let directory = config.state_dir.as_ref().ok_or("Provider cooldown state directory is not configured.")?;
   let allocation = ALLOCATION_STORE.as_ref().map_err(|error| error.to_string())?;
-  let backends =
-    backends.into_iter().map(|backend| (config.provider_tiers.get(backend.name()).copied(), backend)).collect();
+  let backends = backends.into_iter().map(|backend| (provider_tier(config, backend.name()), backend)).collect();
   SearchRouter::new(backends, directory, Arc::clone(allocation))
     .map_err(|error| format!("Could not initialize provider cooldowns: {error}").into())
 }
@@ -339,10 +356,21 @@ pub async fn provider_status() -> InfuResult<Vec<ProviderStatus>> {
       "You.com is disabled; set providers.you.max_requests_per_minute to a positive integer to enable.",
     ));
   }
+  for &name in crate::plugin::disabled_providers() {
+    providers.push(ProviderStatus::unconfigured(
+      name,
+      &format!("Disabled by plugin.providers.{name}.enabled in the configuration."),
+    ));
+  }
   for provider in &mut providers {
-    provider.tier = config.provider_tiers.get(provider.name).copied();
+    provider.tier = provider_tier(config, provider.name);
   }
   Ok(providers)
+}
+
+/// Plugin tiers are known only after discovery, so they are not in configuration.
+fn provider_tier(config: &config::SearchConfig, name: &str) -> Option<u32> {
+  config.provider_tiers.get(name).copied().or_else(|| crate::plugin::tier(name))
 }
 
 /// Fallback sources, reported separately from the general pool.

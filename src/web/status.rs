@@ -107,6 +107,26 @@ pub fn page(status: StatusCode, snapshot: &Value) -> Response<Full<Bytes>> {
   if let Some(providers) = snapshot["probe_providers"].as_array() {
     provider_table(&mut content, "Fallback sources", providers, now, true);
   }
+  let plugin = &snapshot["plugin"];
+  if plugin["configured"].as_bool() == Some(true) {
+    content.push_str("<section class=status-section><h2>Search plugin</h2>");
+    let state = match plugin["state"].as_str() {
+      Some("ready") => {
+        let count = plugin["providers"].as_array().map_or(0, Vec::len);
+        format!("Ready ({count} provider{})", if count == 1 { "" } else { "s" })
+      }
+      _ => "Discovery failed; restart after repairing the plugin".to_owned(),
+    };
+    let _ = write!(content, "<p>Discovery: <strong>{state}</strong></p>");
+    if let Some(error) = plugin["error"].as_str() {
+      let _ = write!(content, "<p class=notice role=alert>{}</p>", escape(error));
+    }
+    if let (Some(running), Some(max)) = (plugin["running_processes"].as_u64(), plugin["max_processes"].as_u64()) {
+      let _ = write!(content, "<p>Processes running: <strong>{running} of {max}</strong></p>");
+    }
+    details(&mut content, "Plugin details", plugin);
+    content.push_str("</section>");
+  }
   let fetch = &snapshot["fetch"];
   if !fetch.is_null() {
     content.push_str("<section class=status-section><h2>Fetch</h2>");

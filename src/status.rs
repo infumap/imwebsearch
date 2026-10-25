@@ -11,7 +11,7 @@ use log::warn;
 use reqwest::Url;
 use serde_json::json;
 
-use crate::{fetch, protocol, search, web};
+use crate::{fetch, plugin, protocol, search, web};
 
 /// Operator actions posted from the status page.
 pub fn handles_action(path: &str) -> bool {
@@ -52,6 +52,7 @@ pub async fn handle_http<B>(req: &Request<B>) -> Response<Full<Bytes>> {
           "configuration_errors": errors,
           "providers": providers,
           "probe_providers": probe_providers,
+          "plugin": plugin::readiness(),
           "fetch": fetch::readiness(),
         }),
         html,

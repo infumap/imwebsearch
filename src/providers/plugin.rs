@@ -5,8 +5,6 @@
 //! One provider declared by the search plugin. Each attempt runs its own plugin
 //! process; see PLUGINS.md for the contract.
 
-#![cfg_attr(not(test), expect(dead_code, reason = "Plugin providers are registered with the search router next."))]
-
 use std::collections::HashSet;
 use std::num::NonZeroU32;
 use std::path::Path;
