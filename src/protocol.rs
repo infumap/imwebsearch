@@ -43,7 +43,7 @@ struct IncomingMessage {
   error: Option<Value>,
 }
 
-/// True when the Origin header is absent (non-browser clients) or names a loopback host.
+/// Allow absent origins, loopback hosts, and the configured server's exact HTTP origin.
 pub fn origin_is_allowed(origin: Option<&str>) -> bool {
   let Some(origin) = origin.map(str::trim).filter(|value| !value.is_empty()) else {
     return true;
@@ -65,7 +65,22 @@ pub fn origin_is_allowed(origin: Option<&str>) -> bool {
   if host == "localhost" || host.ends_with(".localhost") {
     return true;
   }
-  host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
+  let Ok(ip) = host.parse::<IpAddr>() else { return false };
+  if ip.is_loopback() {
+    return true;
+  }
+  let Ok(config) = crate::config::file::current() else { return false };
+  // The configured address is trusted. Using the request's Host header here would permit DNS rebinding.
+  // Wildcard binds do not identify a specific origin and must not authorize other interface addresses.
+  !config.server.host.is_unspecified()
+    && ip == config.server.host
+    && url.scheme() == "http"
+    && url.port_or_known_default() == Some(config.server.port)
+    && url.username().is_empty()
+    && url.password().is_none()
+    && url.path() == "/"
+    && url.query().is_none()
+    && url.fragment().is_none()
 }
 
 fn legacy_protocol_version_supported(version: &str) -> bool {
