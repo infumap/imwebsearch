@@ -75,9 +75,8 @@ impl SearchProvider for Tavily {
   }
 
   fn requests_per_minute(&self) -> Option<NonZeroU32> {
-    // Use the lower Development-key limit, including for Production keys.
-    // https://docs.tavily.com/documentation/rate-limits
-    NonZeroU32::new(100)
+    // Conservative local cap below the Development-key limit.
+    NonZeroU32::new(20)
   }
 
   fn estimate_cost(&self, request: &SearchRequest<'_>) -> ProviderResult<RequestCost> {

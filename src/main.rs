@@ -188,7 +188,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
     );
   }
   if config.tavily.is_some() {
-    info!("Tavily basic search local limit: 100 attempts per rolling minute, concurrent requests allowed");
+    info!("Tavily Basic: local cap 20/rolling minute; 1000 searches/month ($0.008/search)");
   }
   if config.diffbot.is_some() {
     info!(
