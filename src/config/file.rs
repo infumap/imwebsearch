@@ -406,22 +406,6 @@ impl FileConfig {
     // Resolve relative settings against the selected file's directory, including
     // when the file is a symlink. Other runtime paths need not exist yet.
     config.validate(path.parent().ok_or("Configuration file has no parent directory.")?)?;
-    #[cfg(unix)]
-    {
-      use std::os::unix::fs::PermissionsExt;
-      let mode = metadata.permissions().mode();
-      if config.has_api_keys() && mode & 0o077 != 0 {
-        return Err(
-          "Configuration containing API keys or plugin.env must have owner-only permissions (chmod 600).".to_owned(),
-        );
-      }
-      // Whoever can edit the file chooses an executable the server will run.
-      if config.plugin.command.is_some() && mode & 0o022 != 0 {
-        return Err(
-          "Configuration setting plugin.command must not be writable by group or others (chmod 600).".to_owned(),
-        );
-      }
-    }
     Ok(config)
   }
 
@@ -492,25 +476,6 @@ impl FileConfig {
       *raw = url.to_string();
     }
     Ok(())
-  }
-
-  #[cfg(unix)]
-  fn has_api_keys(&self) -> bool {
-    [
-      &self.providers.exa.api_key,
-      &self.providers.tavily.api_key,
-      &self.providers.diffbot.api_key,
-      &self.providers.firecrawl.api_key,
-      &self.providers.brave.api_key,
-      &self.providers.parallel.api_key,
-      &self.providers.brightdata.api_key,
-      &self.providers.serpapi.api_key,
-      &self.providers.context.api_key,
-    ]
-    .into_iter()
-    .any(|key| !key.is_empty())
-      // Plugin environments usually carry the plugin's own credentials.
-      || !self.plugin.env.is_empty()
   }
 }
 
@@ -621,21 +586,5 @@ mod tests {
       let error = validated(&source).err().unwrap_or_default();
       assert!(error.contains(expected), "{source}: {error}");
     }
-  }
-
-  #[cfg(unix)]
-  #[test]
-  fn plugin_command_requires_protected_config() {
-    use std::os::unix::fs::PermissionsExt;
-    let directory = tempfile::tempdir().expect("temporary directory");
-    let path = directory.path().join("config.toml");
-    std::fs::write(&path, "[plugin]\ncommand = \"/bin/true\"\n").unwrap();
-    for (mode, allowed) in [(0o600, true), (0o640, true), (0o620, false), (0o602, false)] {
-      std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
-      assert_eq!(FileConfig::load(&path).is_ok(), allowed, "mode {mode:o}");
-    }
-    std::fs::write(&path, "[plugin]\ncommand = \"/bin/true\"\n[plugin.env]\nKEY = \"x\"\n").unwrap();
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
-    assert!(FileConfig::load(&path).err().unwrap_or_default().contains("owner-only"));
   }
 }

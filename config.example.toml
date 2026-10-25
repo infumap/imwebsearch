@@ -158,7 +158,6 @@ max_requests_per_minute = 30
 max_processes = 4
 
 # The plugin's complete environment. Nothing is inherited, including PATH and HOME.
-# Setting any variable requires owner-only permissions on this file (chmod 600).
 # [plugin.env]
 # ACME_API_KEY = ""
 

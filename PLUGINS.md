@@ -12,16 +12,9 @@ The operator configures a single plugin by its executable path, arguments and
 environment in the `[plugin]` section of `config.toml`. Plugins speak
 [MCP](https://modelcontextprotocol.io) over stdio.
 
-Whoever can modify the executable or the configuration controls code the
-server runs, so imwebsearch refuses a plugin unless:
-
-- the executable is a regular file owned by root or the server's user, and not
-  writable by group or others (for example `chmod 755`);
-- `config.toml` is not writable by group or others, and is owner-only
-  (`chmod 600`) when `[plugin.env]` sets any variable.
-
-Builds made with a umask of `002` are group-writable, so set permissions as part
-of deployment.
+The executable must be a regular file with execute permission. Whoever can
+modify it or `config.toml` controls code the server runs; imwebsearch does not
+check their ownership or permissions.
 
 A minimal working plugin is in [examples/dummy_plugin.rs](examples/dummy_plugin.rs).
 

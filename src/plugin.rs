@@ -170,23 +170,15 @@ async fn declared_tools(_command: &Path, _plugin: &PluginConfig) -> Result<Vec<V
   Err("Search plugins require a Unix platform.".to_owned())
 }
 
-/// Whoever can modify the executable controls code the server runs.
+/// Reports a clearer error than a failed spawn would.
 #[cfg(unix)]
 fn check_executable(path: &Path) -> Result<(), String> {
-  use std::os::unix::fs::MetadataExt;
+  use std::os::unix::fs::PermissionsExt;
 
   let metadata =
     std::fs::metadata(path).map_err(|_| format!("plugin.command {path:?} does not exist or is not accessible."))?;
-  if !metadata.is_file() || metadata.mode() & 0o111 == 0 {
+  if !metadata.is_file() || metadata.permissions().mode() & 0o111 == 0 {
     return Err(format!("plugin.command {path:?} must be an executable regular file."));
-  }
-  if metadata.mode() & 0o022 != 0 {
-    return Err(format!("plugin.command {path:?} must not be writable by group or others."));
-  }
-  // SAFETY: getuid has no preconditions and cannot fail.
-  let uid = unsafe { libc::getuid() };
-  if metadata.uid() != 0 && metadata.uid() != uid {
-    return Err(format!("plugin.command {path:?} must be owned by root or the server's user."));
   }
   Ok(())
 }
@@ -347,12 +339,12 @@ mod tests {
 
   #[cfg(unix)]
   #[test]
-  fn executable_must_be_protected() {
+  fn command_must_be_executable_file() {
     use std::os::unix::fs::PermissionsExt;
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("plugin");
     std::fs::write(&path, "#!/bin/sh\n").unwrap();
-    for (mode, allowed) in [(0o755, true), (0o700, true), (0o644, false), (0o775, false), (0o757, false)] {
+    for (mode, allowed) in [(0o755, true), (0o700, true), (0o777, true), (0o644, false)] {
       std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
       assert_eq!(check_executable(&path).is_ok(), allowed, "mode {mode:o}");
     }
