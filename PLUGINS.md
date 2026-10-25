@@ -119,8 +119,8 @@ remaining providers still register.
 | `requests_per_minute` | yes | Maximum attempt starts in any rolling 60 seconds. 1 to 1,000. |
 | `max_concurrent` | no | Maximum attempts in flight for this provider. 1 to 64. |
 | `min_interval_ms` | no | Minimum spacing between attempt starts. 0 to 3,600,000. |
-| `daily_quota` | no | Maximum attempts in any rolling 24 hours, persisted across restarts. Every attempt is charged immediately before the plugin is started, whether or not it succeeds. 1 to 10,000. |
-| `routing_requests_per_day` | no | Soft daily target used to balance load between providers in the same tier. It never makes a provider unavailable. Defaults to `daily_quota`, otherwise 100. 1 to 1,000,000. |
+| `daily_quota` | no | The upstream's expected free allowance per rolling 24 hours. imwebsearch counts attempts against it persistently, shows the count on the status page, and uses it in place of `routing_requests_per_day`. It is an estimate, **not a local cap**: when the upstream refuses, report `quota_exhausted`. An attempt is counted once the plugin has initialized, just before `tools/call` is sent, whether or not it then succeeds. 1 to 10,000. |
+| `routing_requests_per_day` | no | Soft daily target used to balance load between providers in the same tier. It never makes a provider unavailable. Used only without `daily_quota`. Defaults to 100. 1 to 1,000,000. |
 
 Unknown fields are ignored. The operator can override any field except
 `version` for each provider in the `[plugin.providers.<name>]` tables of

@@ -169,8 +169,10 @@ max_processes = 4
 # requests_per_minute = 10
 # max_concurrent = 1
 # min_interval_ms = 0
+# Expected free allowance per rolling day; balances load, but is not a hard cap.
 # daily_quota = 200
-# routing_requests_per_day = 200
+# Balancing target used only without daily_quota.
+# routing_requests_per_day = 100
 
 
 

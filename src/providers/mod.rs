@@ -19,6 +19,8 @@ mod mcp_http;
 pub(crate) mod mcp_stdio;
 pub mod parallel;
 pub mod parallel_mcp;
+#[cfg(unix)]
+pub mod plugin;
 pub mod purili;
 pub mod reset;
 pub mod serpapi;
