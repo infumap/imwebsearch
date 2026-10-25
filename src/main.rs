@@ -184,7 +184,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.exa.is_some() {
     info!(
-      "Exa Instant search local limits: 600 attempts per rolling minute, at most ten per rolling 1.1 seconds, concurrent requests allowed"
+      "Exa Instant: local caps 2/rolling second, 20/rolling minute; ~2500 searches/month (up to 10 results/search)"
     );
   }
   if config.tavily.is_some() {

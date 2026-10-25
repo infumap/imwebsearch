@@ -77,13 +77,12 @@ impl SearchProvider for Exa {
   }
 
   fn requests_per_minute(&self) -> Option<NonZeroU32> {
-    NonZeroU32::new(600)
+    NonZeroU32::new(20)
   }
 
   fn additional_rate_limits(&self) -> Vec<super::RequestRateLimit> {
-    // Free-tier Search: 10 QPS. Local window includes 10% timing headroom.
-    // https://exa.ai/docs/admin/billing
-    vec![super::RequestRateLimit { max_requests: 10, window: Duration::from_millis(1_100) }]
+    // Conservative local cap with an exact one-second rolling window.
+    vec![super::RequestRateLimit { max_requests: 2, window: Duration::from_secs(1) }]
   }
 
   fn estimate_cost(&self, request: &SearchRequest<'_>) -> ProviderResult<RequestCost> {
