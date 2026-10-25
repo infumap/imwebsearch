@@ -530,8 +530,11 @@ impl BudgetAccount {
       Ok(true)
     })?;
     debug!(
-      "{} provider usage for period {period_start:?}: remaining {:?}, allowance {:?} USD micros; applied={applied}",
-      self.provider, snapshot.remaining_usd_micros, snapshot.allowance_usd_micros
+      "{} provider usage for period {}: remaining {}, allowance {} USD micros; applied={applied}",
+      self.provider,
+      period_start.map_or_else(|| "None".to_owned(), |timestamp| timestamp.to_string()),
+      snapshot.remaining_usd_micros.map_or_else(|| "None".to_owned(), |remaining| remaining.to_string()),
+      snapshot.allowance_usd_micros.map_or_else(|| "None".to_owned(), |allowance| allowance.to_string())
     );
     Ok(())
   }
