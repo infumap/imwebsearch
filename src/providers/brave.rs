@@ -29,6 +29,10 @@ const REQUEST_COST_USD_MICROS: u64 = 5000;
 // https://api-dashboard.search.brave.com/documentation/pricing (checked 2026-10-21)
 pub const FREE_ALLOWANCE_CENTS: u64 = 500;
 
+// Local pacing caps for the free monthly allowance.
+pub const MAX_REQUESTS_PER_MINUTE: u32 = 20;
+pub const MAX_REQUESTS_PER_SECOND: u32 = 2;
+
 /// One API request per search, with no retries or pagination. The shared budget
 /// wrapper must reserve credits before dispatch. Rate-limit headers describe
 /// request windows, not a known monetary account balance.
@@ -71,14 +75,11 @@ impl SearchProvider for Brave {
   }
 
   fn requests_per_minute(&self) -> Option<NonZeroU32> {
-    NonZeroU32::new(3_000)
+    NonZeroU32::new(MAX_REQUESTS_PER_MINUTE)
   }
 
   fn additional_rate_limits(&self) -> Vec<super::RequestRateLimit> {
-    // Current Search pricing publishes 50 requests/second; the rate guide's
-    // 1/second example is not the current Search plan. Keep 10% timing headroom.
-    // https://api-dashboard.search.brave.com/documentation/pricing
-    vec![super::RequestRateLimit { max_requests: 50, window: Duration::from_millis(1_100) }]
+    vec![super::RequestRateLimit { max_requests: MAX_REQUESTS_PER_SECOND, window: Duration::from_secs(1) }]
   }
 
   fn estimate_cost(&self, request: &SearchRequest<'_>) -> ProviderResult<RequestCost> {

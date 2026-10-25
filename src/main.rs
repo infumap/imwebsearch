@@ -206,7 +206,9 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.brave.is_some() {
     info!(
-      "Brave search local limits: 3000 attempts per rolling minute, at most 50 per rolling 1.1 seconds, concurrent requests allowed"
+      "Brave search local limits: {} attempts per rolling minute, at most {} per rolling second; 1000 searches/month",
+      providers::brave::MAX_REQUESTS_PER_MINUTE,
+      providers::brave::MAX_REQUESTS_PER_SECOND
     );
   }
   if config.brightdata.is_some() {
