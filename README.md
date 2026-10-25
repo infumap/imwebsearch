@@ -10,7 +10,7 @@ Four tiers:
 1. High quality search with public access, no account/API key required (3 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai))
 2. High quality search, free account / API key required (9 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai), [brave](https://search.brave.com), [brightdata](https://brightdata.com), [diffbot](https://diffbot.com), [firecrawl](https://firecrawl.dev), [serpapi](https://serpapi.com), [tavily](https://tavily.com))
 3. Lower quality search (1 provider: [purili](https://puri.li))
-4. Fallback to incomplete but reliable/high volume search ([wikipedia]()/[hacker news](https://news.ycombinator.com) aggregated).
+4. Fallback to narrow but reliable/high volume providers (1 provider: [hacker news](https://news.ycombinator.com)).
 
 A search request is handled by the highest tier with available capacity.
 

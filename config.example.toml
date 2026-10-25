@@ -135,10 +135,10 @@ tier = 3
 # Results from all configured fallback providers are aggregated.
 
 [fallback_providers.wikipedia]
-# *** ENABLED BY DEFAULT ***
 # Free, no API key.
+# Strong ideological bias.
 # Set max_requests_per_minute to 0 to disable.
-max_requests_per_minute = 30
+max_requests_per_minute = 0
 language = "en"
 
 [fallback_providers.hacker_news]
