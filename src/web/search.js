@@ -8,6 +8,11 @@ const status = document.querySelector(".search-status");
 const button = form.querySelector("button[type=submit]");
 let searching = false;
 
+// GET searches are already rendered; clean their URL without another request.
+if (location.pathname === "/search") {
+  history.replaceState(null, "", "/");
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (searching) return;
@@ -17,9 +22,6 @@ form.addEventListener("submit", async (event) => {
   button.textContent = "Searching…";
   content.setAttribute("aria-busy", "true");
   status.textContent = "Searching…";
-  // A new search from a GET results page must not leave the old query in the URL.
-  history.replaceState(null, "", "/");
-
   try {
     const response = await fetch(form.action, {
       method: "POST",
