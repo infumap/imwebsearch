@@ -9,6 +9,7 @@ mod duration;
 mod error;
 mod fetch;
 mod identity;
+mod plugin;
 mod protocol;
 mod providers;
 mod request_quota;
@@ -150,6 +151,9 @@ async fn run_server(settings: &'static config::file::FileConfig) {
     info!("PDF service configured: {url} (native-only extraction; capabilities not yet checked).");
   } else {
     info!("PDF service not configured; set fetch.gpu_tools_url to enable native PDF extraction.");
+  }
+  if settings.plugin.command.is_some() {
+    warn!("plugin.command is set, but plugin loading is not implemented yet; no plugin providers are registered.");
   }
 
   let config = match config::search_config() {

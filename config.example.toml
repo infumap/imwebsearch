@@ -145,6 +145,34 @@ language = "en"
 max_requests_per_minute = 30
 
 
+#### Search Provider Plugin
+
+# One executable adding any number of general web search providers over MCP
+# stdio; see PLUGINS.md. Its providers are routed by tier alongside those above.
+# Omit command to disable.
+
+[plugin]
+# command = "/absolute/path/to/plugin"
+# args = []
+# Plugin processes running at once, across all of its providers.
+max_processes = 4
+
+# The plugin's complete environment. Nothing is inherited, including PATH and HOME.
+# Setting any variable requires owner-only permissions on this file (chmod 600).
+# [plugin.env]
+# ACME_API_KEY = ""
+
+# Override metadata the plugin declares for one of its providers, or disable it.
+# [plugin.providers.acme_news]
+# enabled = true
+# tier = 2
+# requests_per_minute = 10
+# max_concurrent = 1
+# min_interval_ms = 0
+# daily_quota = 200
+# routing_requests_per_day = 200
+
+
 
 [browser]
 # Omit path to select a managed or locally discovered Chrome/Chromium.

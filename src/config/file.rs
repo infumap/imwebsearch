@@ -5,6 +5,7 @@
 //! Single-file configuration shared by every server and browser command.
 //! Configuration types deliberately omit Debug and Serialize to protect credentials.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{ErrorKind, Read, Write};
 use std::net::{IpAddr, Ipv4Addr};
@@ -77,6 +78,7 @@ pub struct FileConfig {
   pub logging: LoggingConfig,
   pub providers: ProvidersConfig,
   pub fallback_providers: FallbackProvidersConfig,
+  pub plugin: PluginConfig,
   pub browser: BrowserConfig,
   pub browser_relay: BrowserRelayConfig,
   pub fetch: FetchSettings,
@@ -90,6 +92,7 @@ impl Default for FileConfig {
       logging: LoggingConfig::default(),
       providers: ProvidersConfig::default(),
       fallback_providers: FallbackProvidersConfig::default(),
+      plugin: PluginConfig::default(),
       browser: BrowserConfig::default(),
       browser_relay: BrowserRelayConfig::default(),
       fetch: FetchSettings::default(),
@@ -267,6 +270,55 @@ impl Default for WikipediaConfig {
   }
 }
 
+/// One executable adding search providers over MCP stdio; see PLUGINS.md.
+/// The executable itself is checked at discovery, so a missing or broken
+/// plugin never prevents startup or built-in search.
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginConfig {
+  /// None disables plugins.
+  pub command: Option<PathBuf>,
+  pub args: Vec<String>,
+  /// The complete plugin environment; nothing is inherited.
+  pub env: BTreeMap<String, String>,
+  /// Plugin processes running at once, across all of its providers.
+  pub max_processes: u32,
+  /// Overrides of plugin-declared provider metadata, by provider name.
+  pub providers: BTreeMap<String, PluginProviderConfig>,
+}
+
+impl Default for PluginConfig {
+  fn default() -> Self {
+    Self { command: None, args: Vec::new(), env: BTreeMap::new(), max_processes: 4, providers: BTreeMap::new() }
+  }
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PluginProviderConfig {
+  pub enabled: bool,
+  pub tier: Option<ProviderTier>,
+  pub requests_per_minute: Option<u32>,
+  pub max_concurrent: Option<u32>,
+  pub min_interval_ms: Option<u64>,
+  pub daily_quota: Option<u32>,
+  pub routing_requests_per_day: Option<u32>,
+}
+
+impl Default for PluginProviderConfig {
+  fn default() -> Self {
+    Self {
+      enabled: true,
+      tier: None,
+      requests_per_minute: None,
+      max_concurrent: None,
+      min_interval_ms: None,
+      daily_quota: None,
+      routing_requests_per_day: None,
+    }
+  }
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BrowserConfig {
@@ -385,8 +437,17 @@ impl FileConfig {
     #[cfg(unix)]
     {
       use std::os::unix::fs::PermissionsExt;
-      if config.has_api_keys() && metadata.permissions().mode() & 0o077 != 0 {
-        return Err("Configuration containing API keys must have owner-only permissions (chmod 600).".to_owned());
+      let mode = metadata.permissions().mode();
+      if config.has_api_keys() && mode & 0o077 != 0 {
+        return Err(
+          "Configuration containing API keys or plugin.env must have owner-only permissions (chmod 600).".to_owned(),
+        );
+      }
+      // Whoever can edit the file chooses an executable the server will run.
+      if config.plugin.command.is_some() && mode & 0o022 != 0 {
+        return Err(
+          "Configuration setting plugin.command must not be writable by group or others (chmod 600).".to_owned(),
+        );
       }
     }
     Ok(config)
@@ -428,6 +489,7 @@ impl FileConfig {
     {
       return Err("fallback_providers.wikipedia.language must be a Wikipedia subdomain code such as en.".to_owned());
     }
+    validate_plugin(&mut self.plugin, directory)?;
     if let Some(path) = &mut self.browser.path {
       resolve_path(path, directory, "browser.path")?;
     }
@@ -475,7 +537,50 @@ impl FileConfig {
     ]
     .into_iter()
     .any(|key| !key.is_empty())
+      // Plugin environments usually carry the plugin's own credentials.
+      || !self.plugin.env.is_empty()
   }
+}
+
+fn validate_plugin(plugin: &mut PluginConfig, directory: &Path) -> Result<(), String> {
+  match &mut plugin.command {
+    Some(command) => resolve_path(command, directory, "plugin.command")?,
+    None if !plugin.args.is_empty() || !plugin.env.is_empty() || !plugin.providers.is_empty() => {
+      return Err("plugin.args, plugin.env and plugin.providers require plugin.command.".to_owned());
+    }
+    None => {}
+  }
+  if !(1..=64).contains(&plugin.max_processes) {
+    return Err("plugin.max_processes must be between 1 and 64.".to_owned());
+  }
+  if plugin.args.iter().any(|arg| arg.contains('\0')) {
+    return Err("plugin.args must not contain NUL characters.".to_owned());
+  }
+  // Never echo environment names or values; either may be a credential.
+  if plugin.env.iter().any(|(name, value)| name.is_empty() || name.contains(['=', '\0']) || value.contains('\0')) {
+    return Err("plugin.env names must be nonempty without = or NUL, and values must not contain NUL.".to_owned());
+  }
+  for (name, provider) in &plugin.providers {
+    // An invalid key may be anything, so only valid names are echoed below.
+    crate::plugin::check_provider_name(name).map_err(|reason| format!("Each plugin.providers name {reason}."))?;
+    for (field, value, max) in [
+      ("requests_per_minute", provider.requests_per_minute, crate::plugin::MAX_REQUESTS_PER_MINUTE),
+      ("max_concurrent", provider.max_concurrent, crate::plugin::MAX_CONCURRENT),
+      ("daily_quota", provider.daily_quota, crate::plugin::MAX_DAILY_QUOTA),
+      ("routing_requests_per_day", provider.routing_requests_per_day, crate::plugin::MAX_ROUTING_REQUESTS_PER_DAY),
+    ] {
+      if value.is_some_and(|value| value == 0 || value > max) {
+        return Err(format!("plugin.providers.{name}.{field} must be between 1 and {max}."));
+      }
+    }
+    if provider.min_interval_ms.is_some_and(|interval| interval > crate::plugin::MAX_MIN_INTERVAL_MS) {
+      return Err(format!(
+        "plugin.providers.{name}.min_interval_ms must be at most {}.",
+        crate::plugin::MAX_MIN_INTERVAL_MS
+      ));
+    }
+  }
+  Ok(())
 }
 
 fn validate_api_key(key: &mut String, provider: &str) -> Result<(), String> {
@@ -518,4 +623,76 @@ fn parse_error(source: &str, error: toml::de::Error) -> String {
     format!(" at line {line}, column {column}")
   });
   format!("Invalid TOML configuration{}; check syntax, setting names and value types.", location.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  fn validated(source: &str) -> Result<(tempfile::TempDir, FileConfig), String> {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let mut config: FileConfig = toml::from_str(source).map_err(|error| error.to_string())?;
+    config.validate(directory.path())?;
+    Ok((directory, config))
+  }
+
+  #[test]
+  fn example_config_leaves_plugin_disabled() {
+    let (_directory, config) = validated(EXAMPLE_CONFIG.replace("~/.imwebsearch", ".").as_str()).unwrap();
+    assert!(config.plugin.command.is_none());
+    assert_eq!(config.plugin.max_processes, 4);
+  }
+
+  #[test]
+  fn plugin_command_resolves_against_config_directory() {
+    let (directory, config) = validated(
+      "[plugin]\ncommand = \"bin/plugin\"\nargs = [\"--serve\"]\n[plugin.env]\nKEY = \"a=b\"\n\
+       [plugin.providers.acme_news]\nenabled = false\ntier = 3\ndaily_quota = 10000\n",
+    )
+    .unwrap();
+    assert_eq!(config.plugin.command.as_deref(), Some(directory.path().join("bin/plugin").as_path()));
+    assert!(!config.plugin.providers["acme_news"].enabled);
+  }
+
+  #[test]
+  fn plugin_settings_require_command() {
+    for source in ["[plugin]\nargs = [\"x\"]\n", "[plugin.env]\nKEY = \"x\"\n", "[plugin.providers.acme]\ntier = 2\n"] {
+      assert!(validated(source).err().unwrap_or_default().contains("require plugin.command"), "{source}");
+    }
+  }
+
+  #[test]
+  fn plugin_rejects_invalid_values() {
+    for (source, expected) in [
+      ("max_processes = 0", "max_processes"),
+      ("max_processes = 65", "max_processes"),
+      ("[plugin.env]\n\"\" = \"x\"", "plugin.env"),
+      ("[plugin.env]\n\"A=B\" = \"x\"", "plugin.env"),
+      ("[plugin.providers.exa]", "built-in"),
+      ("[plugin.providers.Acme]", "a-z"),
+      ("[plugin.providers.acme]\ndaily_quota = 10001", "plugin.providers.acme.daily_quota"),
+      ("[plugin.providers.acme]\nrequests_per_minute = 0", "plugin.providers.acme.requests_per_minute"),
+      ("[plugin.providers.acme]\nmin_interval_ms = 3600001", "plugin.providers.acme.min_interval_ms"),
+    ] {
+      let source = format!("[plugin]\ncommand = \"/bin/true\"\n{source}\n");
+      let error = validated(&source).err().unwrap_or_default();
+      assert!(error.contains(expected), "{source}: {error}");
+    }
+  }
+
+  #[cfg(unix)]
+  #[test]
+  fn plugin_command_requires_protected_config() {
+    use std::os::unix::fs::PermissionsExt;
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let path = directory.path().join("config.toml");
+    std::fs::write(&path, "[plugin]\ncommand = \"/bin/true\"\n").unwrap();
+    for (mode, allowed) in [(0o600, true), (0o640, true), (0o620, false), (0o602, false)] {
+      std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).unwrap();
+      assert_eq!(FileConfig::load(&path).is_ok(), allowed, "mode {mode:o}");
+    }
+    std::fs::write(&path, "[plugin]\ncommand = \"/bin/true\"\n[plugin.env]\nKEY = \"x\"\n").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o640)).unwrap();
+    assert!(FileConfig::load(&path).err().unwrap_or_default().contains("owner-only"));
+  }
 }
