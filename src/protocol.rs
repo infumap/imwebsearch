@@ -17,13 +17,18 @@ use serde_json::{Value, json};
 
 use crate::tools::{WebTool, call_tool, tools_list};
 
+mod modern;
+
 pub const PROTOCOL_VERSION_2025_06_18: &str = "2025-06-18";
 pub const PROTOCOL_VERSION_2025_11_25: &str = "2025-11-25";
+pub const PROTOCOL_VERSION_2026_07_28: &str = "2026-07-28";
+const SUPPORTED_VERSIONS: &[&str] =
+  &[PROTOCOL_VERSION_2026_07_28, PROTOCOL_VERSION_2025_11_25, PROTOCOL_VERSION_2025_06_18, "2025-03-26"];
 pub const SERVER_NAME: &str = crate::identity::NAME;
 pub const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const JSON_BODY_MAX_BYTES: usize = 1024 * 1024;
 const HEADER_PROTOCOL_VERSION: &str = "mcp-protocol-version";
-const CORS_ALLOW_HEADERS: &str = "content-type, accept, mcp-protocol-version, mcp-session-id";
+const CORS_ALLOW_HEADERS: &str = "content-type, accept, mcp-protocol-version, mcp-session-id, mcp-method, mcp-name";
 const CORS_EXPOSE_HEADERS: &str = "mcp-protocol-version, mcp-session-id";
 
 #[derive(Deserialize)]
@@ -63,21 +68,23 @@ pub fn origin_is_allowed(origin: Option<&str>) -> bool {
   host.parse::<IpAddr>().map(|ip| ip.is_loopback()).unwrap_or(false)
 }
 
-fn protocol_version_supported(version: &str) -> bool {
+fn legacy_protocol_version_supported(version: &str) -> bool {
   matches!(version.trim(), "2025-03-26" | PROTOCOL_VERSION_2025_06_18 | PROTOCOL_VERSION_2025_11_25)
 }
 
 fn negotiate_protocol_version(requested: Option<&str>) -> &'static str {
   match requested.map(str::trim) {
+    Some("2025-03-26") => "2025-03-26",
     Some(PROTOCOL_VERSION_2025_11_25) => PROTOCOL_VERSION_2025_11_25,
     _ => PROTOCOL_VERSION_2025_06_18,
   }
 }
 
-fn mcp_path(path: &str) -> Option<WebTool> {
+fn mcp_path(path: &str) -> Option<&'static [WebTool]> {
   match path.trim_end_matches('/') {
-    "/mcp/search" => Some(WebTool::Search),
-    "/mcp/fetch" => Some(WebTool::Fetch),
+    "/mcp" => Some(&[WebTool::Search, WebTool::Fetch]),
+    "/mcp/search" => Some(&[WebTool::Search]),
+    "/mcp/fetch" => Some(&[WebTool::Fetch]),
     _ => None,
   }
 }
@@ -151,35 +158,49 @@ fn rpc_result(id: Value, result: Value) -> Value {
   })
 }
 
+fn parse_error_response(origin: Option<&str>, protocol_version: &str, modern: bool) -> Response<Full<Bytes>> {
+  let status = if modern { StatusCode::BAD_REQUEST } else { StatusCode::OK };
+  let payload = if modern {
+    json!({ "jsonrpc": "2.0", "error": { "code": -32700, "message": "Parse error" } })
+  } else {
+    rpc_error(Value::Null, -32700, "Parse error")
+  };
+  response(status, origin, protocol_version, json_body(&payload), |b| b.header(CONTENT_TYPE, "application/json"))
+}
+
+fn server_info() -> Value {
+  json!({
+    "name": SERVER_NAME,
+    "version": SERVER_VERSION,
+    "icons": [{
+      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='1.8'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='m15.4 15.4 5 5M4.5 10.5h12M10.5 4a10 10 0 0 1 0 13M10.5 4a10 10 0 0 0 0 13'/%3E%3C/svg%3E",
+      "mimeType": "image/svg+xml",
+      "sizes": ["any"]
+    }]
+  })
+}
+
 fn initialize_result(params: &Value) -> Value {
   let requested = params.get("protocolVersion").and_then(Value::as_str);
   json!({
     "protocolVersion": negotiate_protocol_version(requested),
     "capabilities": { "tools": {} },
-    "serverInfo": {
-      "name": SERVER_NAME,
-      "version": SERVER_VERSION,
-      "icons": [{
-        "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='1.8'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='m15.4 15.4 5 5M4.5 10.5h12M10.5 4a10 10 0 0 1 0 13M10.5 4a10 10 0 0 0 0 13'/%3E%3C/svg%3E",
-        "mimeType": "image/svg+xml",
-        "sizes": ["any"]
-      }]
-    }
+    "serverInfo": server_info()
   })
 }
 
-async fn dispatch_method(tool: WebTool, method: &str, params: Value) -> Result<Value, (i64, String)> {
+async fn dispatch_method(tools: &[WebTool], method: &str, params: Value) -> Result<Value, (i64, String)> {
   match method {
     "initialize" => Ok(initialize_result(&params)),
     "notifications/initialized" => Ok(json!({})),
     "ping" => Ok(json!({})),
-    "tools/list" => Ok(tools_list(tool)),
+    "tools/list" => Ok(tools_list(tools)),
     "tools/call" => {
       let name = params.get("name").and_then(Value::as_str).unwrap_or("").trim();
       if name.is_empty() {
         return Err((-32602, "Invalid params: missing tool name.".to_owned()));
       }
-      if name != tool.name() {
+      if !tools.iter().any(|tool| name == tool.name()) {
         return Err((-32602, format!("Unknown tool '{name}' for this endpoint.")));
       }
       let arguments = match params.get("arguments") {
@@ -192,7 +213,7 @@ async fn dispatch_method(tool: WebTool, method: &str, params: Value) -> Result<V
   }
 }
 
-async fn handle_rpc(tool: WebTool, message: IncomingMessage) -> Option<Value> {
+async fn handle_rpc(tools: &[WebTool], message: IncomingMessage) -> Option<Value> {
   if message.method.is_none() && (message.result.is_some() || message.error.is_some()) {
     return None;
   }
@@ -213,7 +234,7 @@ async fn handle_rpc(tool: WebTool, message: IncomingMessage) -> Option<Value> {
   if method == "notifications/initialized" && is_notification {
     return None;
   }
-  match dispatch_method(tool, method, message.params).await {
+  match dispatch_method(tools, method, message.params).await {
     Ok(result) => {
       if is_notification {
         None
@@ -231,28 +252,25 @@ async fn handle_rpc(tool: WebTool, message: IncomingMessage) -> Option<Value> {
   }
 }
 
-/// Handle a Streamable HTTP MCP request. JSON-RPC protocol errors stay HTTP 200.
+/// Serve per-request MCP metadata and the earlier initialization-based revisions on each endpoint.
 pub async fn handle_http<B>(req: Request<B>) -> Response<Full<Bytes>>
 where
   B: Body + Unpin,
   B::Error: std::fmt::Display,
 {
-  let origin = req.headers().get(ORIGIN).and_then(|value| value.to_str().ok()).map(str::to_owned);
+  let headers = req.headers().clone();
+  let origin = headers.get(ORIGIN).and_then(|value| value.to_str().ok()).map(str::to_owned);
   let origin_ref = origin.as_deref();
-  let request_protocol_version = req.headers().get(HEADER_PROTOCOL_VERSION).and_then(|value| value.to_str().ok());
-  let protocol_version = negotiate_protocol_version(request_protocol_version);
+  let request_protocol_version = headers.get(HEADER_PROTOCOL_VERSION).and_then(|value| value.to_str().ok());
+  let header_modern = modern::is_modern(&headers, &Value::Null);
+  let protocol_version =
+    if header_modern { PROTOCOL_VERSION_2026_07_28 } else { negotiate_protocol_version(request_protocol_version) };
 
-  if !origin_is_allowed(origin_ref) {
+  if !origin_is_allowed(origin_ref) || headers.get(ORIGIN).is_some_and(|value| value.to_str().is_err()) {
     return response(StatusCode::FORBIDDEN, None, protocol_version, empty_body(), |b| b);
   }
 
-  if let Some(version) = request_protocol_version
-    && !protocol_version_supported(version)
-  {
-    return response(StatusCode::BAD_REQUEST, origin_ref, protocol_version, empty_body(), |b| b);
-  }
-
-  let Some(tool) = mcp_path(req.uri().path()) else {
+  let Some(tools) = mcp_path(req.uri().path()) else {
     return response(StatusCode::NOT_FOUND, origin_ref, protocol_version, empty_body(), |b| b);
   };
 
@@ -264,23 +282,22 @@ where
     Method::POST => {
       let body = match read_body(req.into_body()).await {
         Ok(body) => body,
-        Err(_) => {
-          let payload = rpc_error(Value::Null, -32700, "Parse error");
-          return response(StatusCode::OK, origin_ref, protocol_version, json_body(&payload), |b| {
-            b.header(CONTENT_TYPE, "application/json")
-          });
-        }
+        Err(_) => return parse_error_response(origin_ref, protocol_version, header_modern),
       };
-      let text = match String::from_utf8(body) {
-        Ok(text) => text,
-        Err(_) => {
-          let payload = rpc_error(Value::Null, -32700, "Parse error");
-          return response(StatusCode::OK, origin_ref, protocol_version, json_body(&payload), |b| {
-            b.header(CONTENT_TYPE, "application/json")
-          });
-        }
+      let value: Value = match serde_json::from_slice(&body) {
+        Ok(value) => value,
+        Err(_) => return parse_error_response(origin_ref, protocol_version, header_modern),
       };
-      let message: IncomingMessage = match serde_json::from_str(&text) {
+      if modern::is_modern(&headers, &value) {
+        let (status, payload) = modern::handle_rpc(tools, &headers, &value).await;
+        return match payload {
+          Some(payload) => response(status, origin_ref, PROTOCOL_VERSION_2026_07_28, json_body(&payload), |b| {
+            b.header(CONTENT_TYPE, "application/json")
+          }),
+          None => response(status, origin_ref, PROTOCOL_VERSION_2026_07_28, empty_body(), |b| b),
+        };
+      }
+      let message: IncomingMessage = match serde_json::from_value(value) {
         Ok(message) => message,
         Err(_) => {
           let payload = rpc_error(Value::Null, -32700, "Parse error");
@@ -289,7 +306,7 @@ where
           });
         }
       };
-      match handle_rpc(tool, message).await {
+      match handle_rpc(tools, message).await {
         None => response(StatusCode::ACCEPTED, origin_ref, protocol_version, empty_body(), |b| b),
         Some(payload) => response(StatusCode::OK, origin_ref, protocol_version, json_body(&payload), |b| {
           b.header(CONTENT_TYPE, "application/json")

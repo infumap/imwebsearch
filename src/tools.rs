@@ -42,8 +42,12 @@ impl WebTool {
   }
 }
 
-pub fn tools_list(tool: WebTool) -> Value {
-  let definition = match tool {
+pub fn tools_list(tools: &[WebTool]) -> Value {
+  json!({ "tools": tools.iter().copied().map(tool_definition).collect::<Vec<_>>() })
+}
+
+fn tool_definition(tool: WebTool) -> Value {
+  match tool {
     WebTool::Search => json!({
       "name": tool.name(),
       "title": "Search the web",
@@ -107,8 +111,7 @@ pub fn tools_list(tool: WebTool) -> Value {
       },
       "annotations": { "readOnlyHint": true }
     }),
-  };
-  json!({ "tools": [definition] })
+  }
 }
 
 fn tool_error_json(message: &str) -> String {

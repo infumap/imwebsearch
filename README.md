@@ -23,7 +23,7 @@ Use it for:
 
 Does not use any undocumented APIs or tricks to intentionally evade throttling/blocking.
 
-Web-fetch extracts and returns page content as plain text (no HTML markup), prepended with heading:offset information. The API has optional offset/max_chars parameters. This strategy makes efficient use of valuable LLM context.
+Web-fetch extracts and returns page content as plain text (no HTML markup), prepended with heading:offset information. The MCP function has optional offset/max_chars parameters. This strategy makes efficient use of valuable LLM context.
 
 Includes a Chrome extension to fetch pages via a real browser with user take-over capability for captchas/login (similar to how OpenAI Operator and other automation tools work). Falls back to headless Chrome.
 
@@ -66,11 +66,17 @@ Assuming default host and port config:
 
 MCP endpoints:
 
+- Search and fetch together: `http://127.0.0.1:8791/mcp`
 - Web search: `http://127.0.0.1:8791/mcp/search`
 - Web fetch: `http://127.0.0.1:8791/mcp/fetch`
 
-Add either or both as Streamable HTTP MCP servers in [infumap](https://github.com/infumap/infumap) or
-your harness of choice.
+Add `/mcp` as one Streamable HTTP MCP server in [infumap](https://github.com/infumap/infumap) or your harness
+of choice to discover both `web_search` and `web_fetch`. Alternatively, add either or both separate endpoints
+to select search and fetch independently. The separate endpoints expose only their respective tool.
+
+All three endpoints support MCP `2026-07-28`, including `server/discover`, standard per-request metadata and
+HTTP header validation. Clients using the 2025 revisions can continue using `initialize`, `tools/list` and
+`tools/call`. The server returns JSON responses without requiring SSE streams or session IDs.
 
 `web_search` accepts `query` and an optional `maxResults` (1–30, default 5). Providers may return fewer
 results. `web_fetch` accepts `url`, with optional `maxChars` and `offset` for reading part of a page.

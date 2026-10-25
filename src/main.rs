@@ -253,6 +253,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   };
   let addr = listener.local_addr().expect("Bound listener has a local address");
   info!("Web search interface: http://{addr}/");
+  info!("Combined MCP endpoint: http://{addr}/mcp");
   info!("Web search MCP endpoint: http://{addr}/mcp/search");
   info!("Web fetch MCP endpoint: http://{addr}/mcp/fetch");
   info!("Provider status: http://{addr}/web/status (page), http://{addr}/status (JSON)");
