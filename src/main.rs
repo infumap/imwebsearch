@@ -199,7 +199,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.firecrawl.is_some() {
     info!(
-      "Firecrawl local limit: {} attempts per rolling {} seconds, at most two requests in flight",
+      "Firecrawl local limits: {} attempts per rolling {} seconds; up to 500 searches/month",
       providers::firecrawl::MAX_REQUESTS_PER_MINUTE,
       providers::firecrawl::RATE_WINDOW.as_secs()
     );
