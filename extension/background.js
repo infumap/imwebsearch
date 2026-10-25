@@ -149,8 +149,9 @@ function handle(message) {
 
 async function runJob(request) {
   const job = {id: request.id, tabId: null, previousTabId: null, ruleIds: [], cancelled: false, challenged: false, notified: false,
-    mainFrames: new Set(), status: null, contentType: null, navError: null, download: false,
+    mainFrames: new Set(), status: null, contentType: null, navError: null, download: null,
     socket, finished: false, debuggerAttached: false, mainFrameId: null, capturingPdf: false, pdfResult: null,
+    pdfCaptureStarted: false, pdfRetryUrl: null, pdfRetryStartedAt: null,
     captureError: null, pdfLimit: request.pdf_limit, deadline: Date.now() + request.timeout_ms};
   jobs.set(job.id, job);
   let result;
@@ -237,7 +238,21 @@ function debuggerCommand(job, method, params = {}) {
   return chrome.debugger.sendCommand({tabId: job.tabId}, method, params);
 }
 
+function isPdfUrl(url) {
+  let path = url.pathname;
+  try { path = decodeURIComponent(path); } catch (_) {}
+  return /\.pdf$/i.test(path);
+}
+
+function isPdfContentType(contentType) {
+  const type = (contentType || '').split(';')[0].trim().toLowerCase();
+  // Octet-stream PDFs are also captured; the server checks their PDF signature.
+  return type === 'application/pdf' || type === 'application/octet-stream';
+}
+
 async function capturePdfResponses(job) {
+  checkJob(job);
+  job.pdfCaptureStarted = true;
   await chrome.debugger.attach({tabId: job.tabId}, '1.3');
   job.debuggerAttached = true;
   checkJob(job);
@@ -248,6 +263,30 @@ async function capturePdfResponses(job) {
   await debuggerCommand(job, 'Fetch.enable', {
     patterns: [{resourceType: 'Document', requestStage: 'Response'}],
   });
+}
+
+async function retryPdf(job) {
+  checkJob(job);
+  // Leave the first response (and any PDF viewer) before attaching. The header
+  // observer cannot pause it, so some bytes may already have been downloaded.
+  await chrome.tabs.update(job.tabId, {url: 'about:blank'});
+  for (;;) {
+    checkJob(job);
+    const tab = await chrome.tabs.get(job.tabId);
+    if (tab.url === 'about:blank' && tab.status === 'complete') break;
+    await sleep(25);
+  }
+  await capturePdfResponses(job);
+  checkJob(job);
+  job.status = null;
+  job.contentType = null;
+  job.navError = null;
+  job.download = null;
+  job.capturingPdf = false;
+  job.pdfRetryStartedAt = Date.now();
+  // Retry the effective PDF URL in the same tab/session, within the original
+  // deadline. Interception is now ready before any response arrives.
+  await chrome.tabs.update(job.tabId, {url: job.pdfRetryUrl});
 }
 
 async function sendPdfChunk(job, data) {
@@ -297,9 +336,7 @@ async function captureResponse(job, response) {
   }
   const headers = response.responseHeaders || [];
   const header = name => headers.find(entry => entry.name.toLowerCase() === name)?.value;
-  const type = (header('content-type') || '').split(';')[0].trim().toLowerCase();
-  // Octet-stream PDFs are also captured; the server checks their PDF signature.
-  const pdf = type === 'application/pdf' || type === 'application/octet-stream';
+  const pdf = isPdfContentType(header('content-type'));
   if (frameId !== job.mainFrameId || !pdf || status >= 300 && status < 400) {
     await debuggerCommand(job, 'Fetch.continueRequest', {requestId});
     return;
@@ -347,7 +384,7 @@ async function render(request, job) {
   if (!Number.isSafeInteger(job.pdfLimit) || job.pdfLimit < 0) throw new Error('Invalid PDF byte limit.');
   const tab = await openTab(job);
   await blockPrivateAddresses(job);
-  await capturePdfResponses(job);
+  if (isPdfUrl(url)) await capturePdfResponses(job);
   checkJob(job);
   await chrome.tabs.update(tab.id, {url: url.href});
   let started = null;
@@ -362,8 +399,21 @@ async function render(request, job) {
     }
     if (job.captureError) throw new Error(job.captureError);
     if (job.pdfResult) return job.pdfResult;
+    if (job.pdfRetryUrl && !job.pdfCaptureStarted) {
+      await retryPdf(job);
+      started = null;
+      changed = 0;
+      signature = '';
+      challengeSince = null;
+      continue;
+    }
     if (job.capturingPdf) continue;
-    if (job.download) throw new Error('The URL started a file download rather than opening a document.');
+    if (job.download) {
+      // onCreated for the cancelled first response can arrive after the retry
+      // starts. Its original start time distinguishes it from a new download.
+      if (job.pdfRetryStartedAt !== null && job.download.startedAt < job.pdfRetryStartedAt) job.download = null;
+      else throw new Error('The URL started a file download rather than opening a document.');
+    }
     if (job.navError) throw new Error(`Navigation failed: ${job.navError}.`);
     const probe = await inject(tab.id, imwebsearchProbe);
     if (job.capturingPdf) continue;
@@ -439,6 +489,14 @@ chrome.webRequest.onHeadersReceived.addListener(details => {
   if (!job) return;
   job.status = details.statusCode;
   job.contentType = details.responseHeaders?.find(header => header.name.toLowerCase() === 'content-type')?.value || null;
+  if (!job.pdfCaptureStarted && !job.pdfRetryUrl && isPdfContentType(job.contentType)
+      && !(details.statusCode >= 300 && details.statusCode < 400)) {
+    job.pdfRetryUrl = details.url;
+    // Suppress DOM capture and download/navigation errors until the render loop
+    // can restart this navigation with PDF response interception enabled.
+    job.capturingPdf = true;
+    job.challenged = false;
+  }
 }, {urls: ['<all_urls>'], types: ['main_frame']}, ['responseHeaders']);
 
 chrome.webNavigation.onErrorOccurred.addListener(details => {
@@ -450,7 +508,7 @@ chrome.webNavigation.onErrorOccurred.addListener(details => {
 chrome.downloads.onCreated.addListener(item => {
   for (const job of jobs.values()) {
     if (job.mainFrames.has(item.url) || job.mainFrames.has(item.finalUrl)) {
-      job.download = true;
+      job.download = {startedAt: Date.parse(item.startTime)};
       chrome.downloads.cancel(item.id).then(() => chrome.downloads.erase({id: item.id})).catch(() => {});
     }
   }

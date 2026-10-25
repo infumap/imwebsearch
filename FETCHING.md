@@ -94,9 +94,14 @@ capability. Discovery successes/failures are cached for 60 seconds. A capability
 confirmation is not a live GPU health guarantee.
 
 The client uploads bounded bytes, never a URL for the GPU service to fetch. PDFs
-reached through browser navigation use bytes from that same response and context.
-No cookie transfer or second initial PDF download is required. A two-second
-allowance is reserved for response handling; the remaining budget is sent as
+reached through browser navigation use bytes from the intercepted response in
+that browser context; no cookie transfer is required. The relay enables
+interception up front for URL paths ending in `.pdf`. Other URLs load without
+the debugger until PDF/octet-stream response headers trigger a retry of the
+effective URL in the same tab and session, within the original deadline. Some
+or all of the first response may already have downloaded, and single-use URLs
+may fail on retry. The owned headless browser intercepts from the first request.
+A two-second allowance is reserved for response handling; the remaining budget is sent as
 `X-Pdf-Conversion-Timeout-Secs` and an absolute Unix expiry in
 `X-Pdf-Request-Deadline-Unix-Ms`. Synchronize clocks on all hosts. Uploads, queue
 waits and conversion consume that expiry; each service checks again before

@@ -109,9 +109,13 @@ additional boundary; Chrome's own sandbox remains required on both platforms.
    URLs. The extension blocks literal private addresses and local names in its
    tabs, but DNS names that resolve to private addresses are not checked. Run the
    relay in a dedicated profile that is signed in to nothing. The extension uses
-   `chrome.debugger` only on its temporary job tabs to intercept document responses.
-   PDF bytes are streamed from the original response in bounded chunks over the
-   authenticated relay, preserving that profile's session. The server enforces
+   `chrome.debugger` only on temporary job tabs for likely or detected PDFs;
+   ordinary page fetches do not attach it. A URL path ending in `.pdf` enables
+   interception before navigation. Other PDF/octet-stream responses trigger a
+   retry of the effective URL with interception enabled, preserving the tab's
+   cookies and original deadline. The first response may already have transferred
+   bytes; single-use URLs may fail on retry. PDF bytes from the intercepted
+   response are streamed in bounded chunks over the authenticated relay. The server enforces
    its PDF byte limit, final URL checks, complete transfer size and PDF signature
    before passing bytes to the same native extraction service and cache. A PDF
    response does not switch to the owned headless browser. Cancellation or expiry
