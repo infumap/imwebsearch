@@ -40,7 +40,7 @@ tier = 1
 [providers.tavily_mcp]
 # https://docs.tavily.com/documentation/keyless
 # Free anonymous MCP API, with rate-limits (undocumented).
-# Note: In practice, throttles at 0 requests.
+# Note: In practice, I am throttled before any successful requests.
 # Set max_requests_per_minute to 0 to disable.
 max_requests_per_minute = 0
 tier = 1
@@ -48,7 +48,7 @@ tier = 1
 [providers.firecrawl_mcp]
 # https://docs.firecrawl.dev/mcp-server/keyless
 # Free anonymous MCP API. Per-IP daily request/credit caps exist, but values are unpublished.
-# Note: In practice, throttles at 0 requests.
+# Note: In practice, I am throttled before any successful requests.
 # Set max_requests_per_minute to 0 to disable.
 max_requests_per_minute = 0
 tier = 1

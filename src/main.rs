@@ -182,6 +182,14 @@ async fn run_server(settings: &'static config::file::FileConfig) {
       config.hacker_news_max_requests_per_minute
     );
   }
+  if config.exa.is_some() {
+    info!(
+      "Exa Instant search local limits: 600 attempts per rolling minute, at most ten per rolling 1.1 seconds, concurrent requests allowed"
+    );
+  }
+  if config.tavily.is_some() {
+    info!("Tavily basic search local limit: 100 attempts per rolling minute, concurrent requests allowed");
+  }
   if config.diffbot.is_some() {
     info!(
       "Diffbot local limit: {} attempts per rolling {} seconds, concurrent requests allowed",
@@ -195,6 +203,22 @@ async fn run_server(settings: &'static config::file::FileConfig) {
       providers::firecrawl::MAX_REQUESTS_PER_MINUTE,
       providers::firecrawl::RATE_WINDOW.as_secs()
     );
+  }
+  if config.brave.is_some() {
+    info!(
+      "Brave search local limits: 3000 attempts per rolling minute, at most 50 per rolling 1.1 seconds, concurrent requests allowed"
+    );
+  }
+  if config.brightdata.is_some() {
+    info!("Bright Data MCP local limit: 5 attempts per rolling minute, at most one request in flight");
+  }
+  if config.serpapi.is_some() {
+    info!(
+      "SerpApi local limits: 50 attempts per rolling minute, at most 50 per rolling 66 minutes, concurrent requests allowed"
+    );
+  }
+  if config.context.is_some() {
+    info!("Context.dev local limit: 5 attempts per rolling minute, at most two requests in flight");
   }
   if config.you_max_requests_per_minute > 0 {
     info!(
