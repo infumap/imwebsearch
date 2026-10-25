@@ -5,7 +5,8 @@ Contract version 1. Unix only.
 A plugin is one executable that adds any number of search providers. Each
 provider joins the general search pool alongside the built-in providers and is
 routed, rate limited, cooled down and reported on the status page in the same
-way. The plugin only answers queries. All routing policy stays in imwebsearch.
+way. The plugin declares each provider's tier and limits; imwebsearch enforces
+them and makes every routing decision.
 
 The operator configures a single plugin by its executable path, arguments and
 environment in the `[plugin]` section of `config.toml`. Plugins speak
@@ -54,7 +55,7 @@ The process environment:
   be truncated, and must not contain credentials.
 
 Several plugin processes can run at the same time, for the same or different
-providers. Anything the plugin persists itself must tolerate concurrent
+providers, up to `max_processes` in `[plugin]` (default 4). Anything the plugin persists itself must tolerate concurrent
 processes. Rate and quota tracking are imwebsearch's job; a plugin does not need
 to keep state between calls.
 
@@ -133,9 +134,10 @@ remaining providers still register.
 | `daily_quota` | no | The upstream's expected free allowance per rolling 24 hours. imwebsearch counts attempts against it persistently, shows the count on the status page, and uses it in place of `routing_requests_per_day`. It is an estimate, **not a local cap**: when the upstream refuses, report `quota_exhausted`. An attempt is counted once the plugin has initialized, just before `tools/call` is sent, whether or not it then succeeds. 1 to 10,000. |
 | `routing_requests_per_day` | no | Soft daily target used to balance load between providers in the same tier. It never makes a provider unavailable. Used only without `daily_quota`. Defaults to 100. 1 to 1,000,000. |
 
-Unknown fields are ignored. The operator can override any field except
-`version` for each provider in the `[plugin.providers.<name>]` tables of
-`config.toml`, and can disable individual providers there.
+Unknown fields are ignored. These declarations are the only source of provider
+metadata; `config.toml` has no per-provider plugin settings. To disable a
+provider, leave it out of `tools/list`, for example based on a variable from
+`[plugin.env]`. Changes take effect when imwebsearch restarts.
 
 Plugin providers are unmetered: there is no monetary cost estimate, budget
 or usage reporting in version 1.

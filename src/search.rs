@@ -356,12 +356,6 @@ pub async fn provider_status() -> InfuResult<Vec<ProviderStatus>> {
       "You.com is disabled; set providers.you.max_requests_per_minute to a positive integer to enable.",
     ));
   }
-  for &name in crate::plugin::disabled_providers() {
-    providers.push(ProviderStatus::unconfigured(
-      name,
-      &format!("Disabled by plugin.providers.{name}.enabled in the configuration."),
-    ));
-  }
   for provider in &mut providers {
     provider.tier = provider_tier(config, provider.name);
   }

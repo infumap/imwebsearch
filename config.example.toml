@@ -148,8 +148,8 @@ max_requests_per_minute = 30
 #### Search Provider Plugin
 
 # One executable adding any number of general web search providers over MCP
-# stdio; see PLUGINS.md. Its providers are routed by tier alongside those above.
-# Omit command to disable.
+# stdio; see PLUGINS.md. Its providers are routed by tier alongside those above;
+# the plugin declares each provider's tier and limits. Omit command to disable.
 
 [plugin]
 # command = "/absolute/path/to/plugin"
@@ -161,18 +161,6 @@ max_processes = 4
 # Setting any variable requires owner-only permissions on this file (chmod 600).
 # [plugin.env]
 # ACME_API_KEY = ""
-
-# Override metadata the plugin declares for one of its providers, or disable it.
-# [plugin.providers.acme_news]
-# enabled = true
-# tier = 2
-# requests_per_minute = 10
-# max_concurrent = 1
-# min_interval_ms = 0
-# Expected free allowance per rolling day; balances load, but is not a hard cap.
-# daily_quota = 200
-# Balancing target used only without daily_quota.
-# routing_requests_per_day = 100
 
 
 

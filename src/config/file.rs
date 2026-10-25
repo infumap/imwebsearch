@@ -283,39 +283,11 @@ pub struct PluginConfig {
   pub env: BTreeMap<String, String>,
   /// Plugin processes running at once, across all of its providers.
   pub max_processes: u32,
-  /// Overrides of plugin-declared provider metadata, by provider name.
-  pub providers: BTreeMap<String, PluginProviderConfig>,
 }
 
 impl Default for PluginConfig {
   fn default() -> Self {
-    Self { command: None, args: Vec::new(), env: BTreeMap::new(), max_processes: 4, providers: BTreeMap::new() }
-  }
-}
-
-#[derive(Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct PluginProviderConfig {
-  pub enabled: bool,
-  pub tier: Option<ProviderTier>,
-  pub requests_per_minute: Option<u32>,
-  pub max_concurrent: Option<u32>,
-  pub min_interval_ms: Option<u64>,
-  pub daily_quota: Option<u32>,
-  pub routing_requests_per_day: Option<u32>,
-}
-
-impl Default for PluginProviderConfig {
-  fn default() -> Self {
-    Self {
-      enabled: true,
-      tier: None,
-      requests_per_minute: None,
-      max_concurrent: None,
-      min_interval_ms: None,
-      daily_quota: None,
-      routing_requests_per_day: None,
-    }
+    Self { command: None, args: Vec::new(), env: BTreeMap::new(), max_processes: 4 }
   }
 }
 
@@ -545,8 +517,8 @@ impl FileConfig {
 fn validate_plugin(plugin: &mut PluginConfig, directory: &Path) -> Result<(), String> {
   match &mut plugin.command {
     Some(command) => resolve_path(command, directory, "plugin.command")?,
-    None if !plugin.args.is_empty() || !plugin.env.is_empty() || !plugin.providers.is_empty() => {
-      return Err("plugin.args, plugin.env and plugin.providers require plugin.command.".to_owned());
+    None if !plugin.args.is_empty() || !plugin.env.is_empty() => {
+      return Err("plugin.args and plugin.env require plugin.command.".to_owned());
     }
     None => {}
   }
@@ -559,26 +531,6 @@ fn validate_plugin(plugin: &mut PluginConfig, directory: &Path) -> Result<(), St
   // Never echo environment names or values; either may be a credential.
   if plugin.env.iter().any(|(name, value)| name.is_empty() || name.contains(['=', '\0']) || value.contains('\0')) {
     return Err("plugin.env names must be nonempty without = or NUL, and values must not contain NUL.".to_owned());
-  }
-  for (name, provider) in &plugin.providers {
-    // An invalid key may be anything, so only valid names are echoed below.
-    crate::plugin::check_provider_name(name).map_err(|reason| format!("Each plugin.providers name {reason}."))?;
-    for (field, value, max) in [
-      ("requests_per_minute", provider.requests_per_minute, crate::plugin::MAX_REQUESTS_PER_MINUTE),
-      ("max_concurrent", provider.max_concurrent, crate::plugin::MAX_CONCURRENT),
-      ("daily_quota", provider.daily_quota, crate::plugin::MAX_DAILY_QUOTA),
-      ("routing_requests_per_day", provider.routing_requests_per_day, crate::plugin::MAX_ROUTING_REQUESTS_PER_DAY),
-    ] {
-      if value.is_some_and(|value| value == 0 || value > max) {
-        return Err(format!("plugin.providers.{name}.{field} must be between 1 and {max}."));
-      }
-    }
-    if provider.min_interval_ms.is_some_and(|interval| interval > crate::plugin::MAX_MIN_INTERVAL_MS) {
-      return Err(format!(
-        "plugin.providers.{name}.min_interval_ms must be at most {}.",
-        crate::plugin::MAX_MIN_INTERVAL_MS
-      ));
-    }
   }
   Ok(())
 }
@@ -645,18 +597,14 @@ mod tests {
 
   #[test]
   fn plugin_command_resolves_against_config_directory() {
-    let (directory, config) = validated(
-      "[plugin]\ncommand = \"bin/plugin\"\nargs = [\"--serve\"]\n[plugin.env]\nKEY = \"a=b\"\n\
-       [plugin.providers.acme_news]\nenabled = false\ntier = 3\ndaily_quota = 10000\n",
-    )
-    .unwrap();
+    let (directory, config) =
+      validated("[plugin]\ncommand = \"bin/plugin\"\nargs = [\"--serve\"]\n[plugin.env]\nKEY = \"a=b\"\n").unwrap();
     assert_eq!(config.plugin.command.as_deref(), Some(directory.path().join("bin/plugin").as_path()));
-    assert!(!config.plugin.providers["acme_news"].enabled);
   }
 
   #[test]
   fn plugin_settings_require_command() {
-    for source in ["[plugin]\nargs = [\"x\"]\n", "[plugin.env]\nKEY = \"x\"\n", "[plugin.providers.acme]\ntier = 2\n"] {
+    for source in ["[plugin]\nargs = [\"x\"]\n", "[plugin.env]\nKEY = \"x\"\n"] {
       assert!(validated(source).err().unwrap_or_default().contains("require plugin.command"), "{source}");
     }
   }
@@ -668,11 +616,6 @@ mod tests {
       ("max_processes = 65", "max_processes"),
       ("[plugin.env]\n\"\" = \"x\"", "plugin.env"),
       ("[plugin.env]\n\"A=B\" = \"x\"", "plugin.env"),
-      ("[plugin.providers.exa]", "built-in"),
-      ("[plugin.providers.Acme]", "a-z"),
-      ("[plugin.providers.acme]\ndaily_quota = 10001", "plugin.providers.acme.daily_quota"),
-      ("[plugin.providers.acme]\nrequests_per_minute = 0", "plugin.providers.acme.requests_per_minute"),
-      ("[plugin.providers.acme]\nmin_interval_ms = 3600001", "plugin.providers.acme.min_interval_ms"),
     ] {
       let source = format!("[plugin]\ncommand = \"/bin/true\"\n{source}\n");
       let error = validated(&source).err().unwrap_or_default();
