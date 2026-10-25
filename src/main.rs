@@ -152,9 +152,8 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   } else {
     info!("PDF service not configured; set fetch.gpu_tools_url to enable native PDF extraction.");
   }
-  if settings.plugin.command.is_some() {
-    warn!("plugin.command is set, but plugin loading is not implemented yet; no plugin providers are registered.");
-  }
+  // Discovery must finish before search providers are registered.
+  plugin::discover(&settings.plugin).await;
 
   let config = match config::search_config() {
     Ok(config) => config,

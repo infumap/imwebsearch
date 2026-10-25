@@ -16,7 +16,7 @@ mod html_fingerprint;
 mod mcp;
 mod mcp_http;
 #[cfg(unix)]
-mod mcp_stdio;
+pub(crate) mod mcp_stdio;
 pub mod parallel;
 pub mod parallel_mcp;
 pub mod purili;

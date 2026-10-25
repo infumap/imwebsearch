@@ -6,8 +6,6 @@
 //! plugin process and its process group. Dropping an unfinished session kills
 //! the group at once; `finish` allows a short exit grace in the background.
 
-#![cfg_attr(not(test), expect(dead_code, reason = "Plugin discovery and search adopt this transport next."))]
-
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Stdio;
@@ -27,7 +25,7 @@ const EXIT_GRACE: Duration = Duration::from_secs(1);
 const MAX_STDERR_LINES: usize = 64;
 const MAX_STDERR_LINE_CHARS: usize = 1000;
 
-pub(super) struct Session {
+pub(crate) struct Session {
   name: &'static str,
   /// Also the process group id. The leader is reaped only after `finish`, or
   /// by Tokio after drop, so this id cannot be reused while the session lives.
@@ -42,7 +40,7 @@ pub(super) struct Session {
 impl Session {
   /// Spawn the plugin with exactly the configured environment, then complete
   /// MCP initialization. The caller bounds the whole session with a deadline.
-  pub(super) async fn start(
+  pub(crate) async fn start(
     name: &'static str,
     program: &Path,
     args: &[String],
@@ -84,7 +82,7 @@ impl Session {
 
   /// Plugin requests received while waiting are answered and notifications are
   /// ignored. JSON-RPC errors other than invalid requests are unexpected.
-  pub(super) async fn request(&mut self, method: &'static str, params: Value) -> ProviderResult<Value> {
+  pub(crate) async fn request(&mut self, method: &'static str, params: Value) -> ProviderResult<Value> {
     let id = self.next_id;
     self.next_id += 1;
     self.send(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })).await?;
@@ -109,7 +107,7 @@ impl Session {
 
   /// Close stdin and let the plugin exit by itself, killing its process group
   /// after the grace period. Runs in the background so replies are not delayed.
-  pub(super) fn finish(mut self) {
+  pub(crate) fn finish(mut self) {
     let (Some(child), stdin, stderr) = (self.child.take(), self.stdin.take(), self.stderr.take()) else { return };
     tokio::spawn(shut_down(self.pid, child, stdin, stderr));
   }
