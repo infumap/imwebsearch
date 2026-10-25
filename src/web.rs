@@ -187,7 +187,7 @@ async fn search_page(query: &str) -> Response<Full<Bytes>> {
       }
       let name = escape(provider);
       if let Some(homepage) = provider_homepage(provider) {
-        let _ = write!(content, "<a href=\"{homepage}\" rel=noreferrer>{name}</a>");
+        let _ = write!(content, "<a href=\"{homepage}\" target=_blank rel=\"noopener noreferrer\">{name}</a>");
       } else {
         content.push_str(&name);
       }
@@ -210,7 +210,7 @@ async fn search_page(query: &str) -> Response<Full<Bytes>> {
       let _ = write!(
         content,
         "<li class=result><div class=result-address>{url}</div>\
-         <h2><a href=\"{url}\" rel=noreferrer>{title}</a></h2>\
+         <h2><a href=\"{url}\" target=_blank rel=\"noopener noreferrer\">{title}</a></h2>\
          <p>{snippet}</p><a class=fetch-link href=\"/fetch?{fetch_query}\" target=_blank rel=\"noopener noreferrer\" \
          aria-label=\"Fetch text for {title} (opens in a new tab)\">Fetch text <span aria-hidden=true>↗</span></a></li>",
         snippet = escape(&result.snippet),
