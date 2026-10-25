@@ -14,7 +14,7 @@ filter = "debug"
 #### General Web Search Providers
 
 # Default tiers: 1 = public access, 2 = free account without a credit card,
-# 3 = free monthly credits requiring a credit card, 4 = Purili.
+# 3 = free monthly credits requiring a credit card or phone number, 4 = Purili.
 # Lower tier numbers are tried first; each provider's tier can be overridden.
 
 [providers.you]
@@ -87,24 +87,9 @@ tier = 2
 api_key = ""
 tier = 2
 
-[providers.brightdata]
-# https://brightdata.com/pricing/mcp-server
-# 5,000 requests/month free - up to 5,000 searches.
-# Free account and API key required; no credit card needed.
-api_key = ""
-tier = 2
-
-[providers.serpapi]
-# https://serpapi.com/
-# 250 searches/month free.
-# Free account and API key required.
-api_key = ""
-tier = 2
-
 [providers.context]
 # https://www.context.dev/search-api
-# 1,000 credits/month free - about 1,000 searches at 10 results each.
-# Search costs 1 credit per 10 returned results, rounded up.
+# 1,000 credits/month free - about 1,000 searches.
 # Free account and API key required; no credit card needed.
 api_key = ""
 tier = 2
@@ -121,6 +106,13 @@ tier = 3
 # https://parallel.ai/pricing
 # $5 recurring free credits/month - up to 5,000 Fast searches.
 # Free account, API key and credit card required.
+api_key = ""
+tier = 3
+
+[providers.serpapi]
+# https://serpapi.com/
+# 250 searches/month free.
+# Free account, API key and phone number required.
 api_key = ""
 tier = 3
 

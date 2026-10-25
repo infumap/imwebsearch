@@ -123,7 +123,7 @@ impl Default for LoggingConfig {
 }
 
 /// Tiers are positive integers. Keyless providers default to tier one;
-/// API-key providers use tier two, or tier three when a credit card is required.
+/// API-key providers use tier two, or tier three when a credit card or phone number is required.
 /// Purili defaults to tier four.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(transparent)]
@@ -153,10 +153,10 @@ pub struct ProvidersConfig {
   pub tavily: MeteredConfig,
   pub diffbot: MeteredConfig,
   pub firecrawl: MeteredConfig,
-  pub brave: CardRequiredMeteredConfig,
-  pub parallel: CardRequiredMeteredConfig,
+  pub brave: TierThreeMeteredConfig,
+  pub parallel: TierThreeMeteredConfig,
   pub brightdata: MeteredConfig,
-  pub serpapi: MeteredConfig,
+  pub serpapi: TierThreeMeteredConfig,
   pub context: MeteredConfig,
   pub purili: PuriliConfig,
 }
@@ -230,12 +230,12 @@ impl Default for MeteredConfig {
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct CardRequiredMeteredConfig {
+pub struct TierThreeMeteredConfig {
   pub api_key: String,
   pub tier: ProviderTier,
 }
 
-impl Default for CardRequiredMeteredConfig {
+impl Default for TierThreeMeteredConfig {
   fn default() -> Self {
     Self { api_key: String::new(), tier: ProviderTier(NonZeroU32::new(3).expect("tier 3 is nonzero")) }
   }
