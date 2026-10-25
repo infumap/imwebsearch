@@ -29,30 +29,28 @@ tier = 1
 max_requests_per_minute = 1
 tier = 1
 
-[providers.tavily_mcp]
-# *** ENABLED BY DEFAULT ***
-# https://docs.tavily.com/documentation/keyless
-# Free anonymous MCP API. But Rate-limited (undocumented).
-# Note: In practice, I am get no free quota.
-# Set max_requests_per_minute to 0 to disable.
-max_requests_per_minute = 1
-tier = 1
-
-[providers.firecrawl_mcp]
-# *** ENABLED BY DEFAULT ***
-# https://docs.firecrawl.dev/mcp-server/keyless
-# Free anonymous MCP API. Per-IP daily request/credit caps exist, but values are unpublished.
-# Note: In practice, I am get no free quota.
-# Set max_requests_per_minute to 0 to disable.
-max_requests_per_minute = 1
-tier = 1
-
 [providers.parallel_mcp]
 # *** ENABLED BY DEFAULT ***
 # https://docs.parallel.ai/integrations/mcp/search-mcp
 # Free anonymous MCP API. rate-limits are unpublished.
 # Set max_requests_per_minute to 0 to disable.
 max_requests_per_minute = 2
+tier = 1
+
+[providers.tavily_mcp]
+# https://docs.tavily.com/documentation/keyless
+# Free anonymous MCP API, with rate-limits (undocumented).
+# Note: In practice, throttles at 0 requests.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 0
+tier = 1
+
+[providers.firecrawl_mcp]
+# https://docs.firecrawl.dev/mcp-server/keyless
+# Free anonymous MCP API. Per-IP daily request/credit caps exist, but values are unpublished.
+# Note: In practice, throttles at 0 requests.
+# Set max_requests_per_minute to 0 to disable.
+max_requests_per_minute = 0
 tier = 1
 
 [providers.exa]
