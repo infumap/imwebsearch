@@ -13,7 +13,10 @@ pub mod firecrawl;
 pub mod firecrawl_mcp;
 pub mod hacker_news;
 mod html_fingerprint;
+mod mcp;
 mod mcp_http;
+#[cfg(unix)]
+mod mcp_stdio;
 pub mod parallel;
 pub mod parallel_mcp;
 pub mod purili;

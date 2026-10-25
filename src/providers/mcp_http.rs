@@ -8,9 +8,9 @@ use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderValue};
 use reqwest::{Client, RequestBuilder, Response, Url};
 use serde_json::{Value, json};
 
+use super::mcp::{PROTOCOL, initialize_params, matching_reply, negotiated_protocol, unexpected};
 use super::{ProviderError, ProviderErrorKind, ProviderResult};
 
-const PROTOCOL: &str = "2025-06-18";
 const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_ERROR_BYTES: usize = 64 * 1024;
 
@@ -47,26 +47,8 @@ impl Session {
   }
 
   pub(super) async fn prepare(&mut self) -> ProviderResult<()> {
-    let result = self
-      .rpc(
-        1,
-        "initialize",
-        json!({
-          "protocolVersion": PROTOCOL,
-          "capabilities": {},
-          "clientInfo": { "name": crate::identity::NAME, "version": env!("CARGO_PKG_VERSION") }
-        }),
-      )
-      .await?;
-    self.protocol = match result.get("protocolVersion").and_then(Value::as_str) {
-      Some("2025-03-26") => "2025-03-26",
-      Some("2025-06-18") => "2025-06-18",
-      Some("2025-11-25") => "2025-11-25",
-      _ => return Err(unexpected("MCP negotiated an unsupported protocol version.")),
-    };
-    if !result.pointer("/capabilities/tools").is_some_and(Value::is_object) {
-      return Err(unexpected("MCP did not advertise tool support."));
-    }
+    let result = self.rpc(1, "initialize", initialize_params()).await?;
+    self.protocol = negotiated_protocol(&result)?;
     let response = self
       .request()
       .json(&json!({
@@ -209,7 +191,7 @@ async fn read_reply(mut response: Response, id: u64, endpoint: &Endpoint) -> Pro
           continue;
         }
         let message: Value = serde_json::from_str(&data).map_err(|_| unexpected("MCP returned invalid event JSON."))?;
-        if let Some(result) = matching_reply(message, id, endpoint)? {
+        if let Some(result) = matching_reply(message, id, endpoint.tool_error)? {
           return Ok(result);
         }
       }
@@ -217,7 +199,7 @@ async fn read_reply(mut response: Response, id: u64, endpoint: &Endpoint) -> Pro
   }
   if !streaming {
     let message: Value = serde_json::from_slice(&buffer).map_err(|_| unexpected("MCP returned invalid JSON."))?;
-    if let Some(result) = matching_reply(message, id, endpoint)? {
+    if let Some(result) = matching_reply(message, id, endpoint.tool_error)? {
       return Ok(result);
     }
   }
@@ -234,34 +216,6 @@ fn take_event(buffer: &mut Vec<u8>) -> Option<Vec<u8>> {
   let event = buffer[..index].to_vec();
   buffer.drain(..index + size);
   Some(event)
-}
-
-fn matching_reply(message: Value, id: u64, endpoint: &Endpoint) -> ProviderResult<Option<Value>> {
-  if message.get("jsonrpc").and_then(Value::as_str) != Some("2.0") {
-    return Err(unexpected("MCP returned an invalid JSON-RPC envelope."));
-  }
-  if message.get("id").and_then(Value::as_u64) != Some(id) {
-    return Ok(None);
-  }
-  if let Some(error) = message.get("error") {
-    if matches!(error.get("code").and_then(Value::as_i64), Some(-32602..=-32600)) {
-      return Err(
-        ProviderError::new(ProviderErrorKind::InvalidRequest, "MCP rejected the request parameters.")
-          .with_error_payload(error),
-      );
-    }
-    return Err(
-      (endpoint.tool_error)(error)
-        .unwrap_or_else(|| unexpected("MCP reported a protocol error."))
-        .with_error_payload(error),
-    );
-  }
-  message
-    .get("result")
-    .filter(|result| result.is_object())
-    .cloned()
-    .map(Some)
-    .ok_or_else(|| unexpected("MCP reply omitted its result."))
 }
 
 impl Session {
@@ -299,8 +253,4 @@ fn request_error(error: reqwest::Error) -> ProviderError {
     ProviderErrorKind::Transient,
     if error.is_timeout() { "MCP request timed out." } else { "MCP request failed." },
   )
-}
-
-fn unexpected(message: &'static str) -> ProviderError {
-  ProviderError::new(ProviderErrorKind::UnexpectedResponse, message)
 }
