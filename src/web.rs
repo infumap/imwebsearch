@@ -8,7 +8,8 @@ use std::fmt::Write;
 use bytes::Bytes;
 use futures_util::FutureExt;
 use futures_util::future::{BoxFuture, Shared};
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full, LengthLimitError, Limited};
+use hyper::body::Body;
 use hyper::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE, ORIGIN};
 use hyper::{Method, Request, Response, StatusCode};
 use log::warn;
@@ -27,6 +28,8 @@ use crate::{protocol, search, tools};
 
 const PAGE_RESULTS: usize = 10;
 const MAX_QUERY_BYTES: usize = 4_096;
+// A form can percent-encode every query byte, plus the leading `q=`.
+const MAX_SEARCH_BODY_BYTES: usize = MAX_QUERY_BYTES * 3 + 2;
 const HTML: &str = "text/html; charset=utf-8";
 const TEXT: &str = "text/plain; charset=utf-8";
 
@@ -36,11 +39,15 @@ type PendingSearch = Shared<BoxFuture<'static, BrowserSearchResult>>;
 static PENDING_SEARCHES: Lazy<Mutex<HashMap<String, PendingSearch>>> = Lazy::new(Mutex::default);
 
 pub fn handles_path(path: &str) -> bool {
-  matches!(path, "/" | "/search" | "/fetch" | "/search.css" | "/infumap.png" | "/favicon.ico")
+  matches!(path, "/" | "/search" | "/fetch" | "/search.css" | "/search.js" | "/infumap.png" | "/favicon.ico")
 }
 
 /// Browser routes share the MCP server's providers, accounting and fetch tool.
-pub async fn handle_http<B>(req: &Request<B>) -> Response<Full<Bytes>> {
+pub async fn handle_http<B>(req: Request<B>) -> Response<Full<Bytes>>
+where
+  B: Body,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
   let origin_allowed = match req.headers().get(ORIGIN) {
     Some(origin) => origin.to_str().is_ok_and(|origin| protocol::origin_is_allowed(Some(origin))),
     None => true,
@@ -51,24 +58,64 @@ pub async fn handle_http<B>(req: &Request<B>) -> Response<Full<Bytes>> {
   if !origin_allowed || cross_site {
     return response(StatusCode::FORBIDDEN, TEXT, "Cross-site requests are not allowed.");
   }
+  if req.uri().path() == "/search" && req.method() == Method::POST {
+    return post_search(req).await;
+  }
   if req.method() != Method::GET {
-    let mut result = response(StatusCode::METHOD_NOT_ALLOWED, TEXT, "Use GET.");
-    result.headers_mut().insert(ALLOW, hyper::header::HeaderValue::from_static("GET"));
+    let allowed = if req.uri().path() == "/search" { "GET, POST" } else { "GET" };
+    let mut result = response(StatusCode::METHOD_NOT_ALLOWED, TEXT, format!("Use {allowed}."));
+    result.headers_mut().insert(ALLOW, hyper::header::HeaderValue::from_static(allowed));
     return result;
   }
   match req.uri().path() {
     "/" => response(StatusCode::OK, HTML, page("", "", StatusCode::OK)),
     "/search.css" => response(StatusCode::OK, "text/css; charset=utf-8", include_str!("web/search.css")),
+    "/search.js" => response(StatusCode::OK, "text/javascript; charset=utf-8", include_str!("web/search.js")),
     "/infumap.png" => {
       response(StatusCode::OK, "image/png", Bytes::from_static(include_bytes!("web/assets/circle.png")))
     }
     "/favicon.ico" => {
       response(StatusCode::OK, "image/x-icon", Bytes::from_static(include_bytes!("web/assets/favicon.ico")))
     }
-    "/search" => search_page(&parameter(req, "q").unwrap_or_default()).await,
-    "/fetch" => fetch_page(req).await,
+    "/search" => search_page(&parameter(&req, "q").unwrap_or_default()).await,
+    "/fetch" => fetch_page(&req).await,
     _ => response(StatusCode::NOT_FOUND, TEXT, "Not found."),
   }
+}
+
+async fn post_search<B>(req: Request<B>) -> Response<Full<Bytes>>
+where
+  B: Body,
+  B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+  let form_encoded = req
+    .headers()
+    .get(CONTENT_TYPE)
+    .and_then(|value| value.to_str().ok())
+    .and_then(|value| value.split(';').next())
+    .is_some_and(|value| value.trim().eq_ignore_ascii_case("application/x-www-form-urlencoded"));
+  if !form_encoded {
+    return search_form_error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Submit the search as a URL-encoded form.");
+  }
+  let body = match Limited::new(req.into_body(), MAX_SEARCH_BODY_BYTES).collect().await {
+    Ok(body) => body.to_bytes(),
+    Err(error) if error.is::<LengthLimitError>() => {
+      return search_form_error(StatusCode::PAYLOAD_TOO_LARGE, "That query is too long. Please use a shorter query.");
+    }
+    Err(_) => return search_form_error(StatusCode::BAD_REQUEST, "Could not read the search. Please try again."),
+  };
+  let Ok(form) = std::str::from_utf8(&body) else {
+    return search_form_error(StatusCode::BAD_REQUEST, "The search must use UTF-8 text.");
+  };
+  let mut url = Url::parse("http://localhost/").expect("Static URL is valid");
+  url.set_query(Some(form));
+  let query = url.query_pairs().find(|(key, _)| key == "q").map(|(_, value)| value.into_owned()).unwrap_or_default();
+  search_page(&query).await
+}
+
+fn search_form_error(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
+  let content = format!("<p class=notice role=alert>{}</p>", escape(message));
+  response(status, HTML, page("", &content, status))
 }
 
 fn parameter<B>(req: &Request<B>, name: &str) -> Option<String> {
@@ -255,7 +302,7 @@ fn response(status: StatusCode, content_type: &'static str, body: impl Into<Byte
     .header("referrer-policy", "same-origin")
     .header(
       "content-security-policy",
-      "default-src 'none'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+      "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
     )
     .body(Full::new(body.into()))
     .expect("Static response headers are valid")

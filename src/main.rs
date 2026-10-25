@@ -319,7 +319,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
             {
               status::handle_http(&req).await
             } else if web::handles_path(req.uri().path()) {
-              web::handle_http(&req).await
+              web::handle_http(req).await
             } else {
               handle_http(req).await
             };
