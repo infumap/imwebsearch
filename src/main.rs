@@ -178,13 +178,13 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.hacker_news_max_requests_per_minute > 0 {
     info!(
-      "Fallback searches use Hacker News through Algolia: {} attempts per rolling minute, concurrent requests allowed",
+      "Fallback searches use Hacker News through Algolia: {} attempts per rolling minute",
       config.hacker_news_max_requests_per_minute
     );
   }
   if config.exa.is_some() {
     info!(
-      "Exa Instant: local caps 2/rolling second, 20/rolling minute; ~2500 searches/month (up to 10 results/search)"
+      "Exa Instant: local caps 2/rolling second, 20/rolling minute; ~2500 searches/month"
     );
   }
   if config.tavily.is_some() {
@@ -192,7 +192,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.diffbot.is_some() {
     info!(
-      "Diffbot local limit: {} attempts per rolling {} seconds, concurrent requests allowed",
+      "Diffbot local limit: {} attempts per rolling {} seconds",
       providers::diffbot::MAX_REQUESTS_PER_MINUTE,
       providers::diffbot::RATE_WINDOW.as_secs()
     );
@@ -222,7 +222,7 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.you_max_requests_per_minute > 0 {
     info!(
-      "You.com free configuration: {} requests per rolling 24 hours, {} attempts per rolling minute, concurrent requests allowed",
+      "You.com free configuration: {} requests per rolling 24 hours, {} attempts per rolling minute",
       providers::you::MAX_DAILY_FREE_REQUESTS,
       config.you_max_requests_per_minute
     );
