@@ -598,13 +598,13 @@ pub struct BudgetedProvider {
 impl BudgetedProvider {
   pub fn new(inner: impl SearchProvider + 'static, account: BudgetAccount) -> ProviderResult<Self> {
     let balance = account.balance()?;
-    info!(
-      "{} local budget (USD micros): consumed {}, reserved {}, free remaining {}, reset timestamp {:?}",
+    debug!(
+      "{} local budget (USD micros): consumed {}, reserved {}, free remaining {}, reset timestamp {}",
       inner.name(),
       balance.consumed_usd_micros,
       balance.reserved_usd_micros,
       balance.free_remaining_usd_micros,
-      balance.period_end
+      balance.period_end.map_or_else(|| "None".to_owned(), |timestamp| timestamp.to_string())
     );
     Ok(Self { inner: Box::new(inner), account, dispatch: Arc::default() })
   }
