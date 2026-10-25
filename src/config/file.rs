@@ -123,7 +123,8 @@ impl Default for LoggingConfig {
 }
 
 /// Tiers are positive integers. Keyless providers default to tier one;
-/// API-key providers override that default with tier two; Purili uses tier three.
+/// API-key providers use tier two, or tier three when a credit card is required.
+/// Purili defaults to tier four.
 #[derive(Clone, Copy, Deserialize)]
 #[serde(transparent)]
 pub struct ProviderTier(NonZeroU32);
@@ -152,8 +153,8 @@ pub struct ProvidersConfig {
   pub tavily: MeteredConfig,
   pub diffbot: MeteredConfig,
   pub firecrawl: MeteredConfig,
-  pub brave: MeteredConfig,
-  pub parallel: MeteredConfig,
+  pub brave: CardRequiredMeteredConfig,
+  pub parallel: CardRequiredMeteredConfig,
   pub brightdata: MeteredConfig,
   pub serpapi: MeteredConfig,
   pub context: MeteredConfig,
@@ -229,6 +230,19 @@ impl Default for MeteredConfig {
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
+pub struct CardRequiredMeteredConfig {
+  pub api_key: String,
+  pub tier: ProviderTier,
+}
+
+impl Default for CardRequiredMeteredConfig {
+  fn default() -> Self {
+    Self { api_key: String::new(), tier: ProviderTier(NonZeroU32::new(3).expect("tier 3 is nonzero")) }
+  }
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct PuriliConfig {
   pub max_requests_per_minute: u32,
   pub tier: ProviderTier,
@@ -236,7 +250,7 @@ pub struct PuriliConfig {
 
 impl Default for PuriliConfig {
   fn default() -> Self {
-    Self { max_requests_per_minute: 0, tier: ProviderTier(NonZeroU32::new(3).expect("tier 3 is nonzero")) }
+    Self { max_requests_per_minute: 0, tier: ProviderTier(NonZeroU32::new(4).expect("tier 4 is nonzero")) }
   }
 }
 

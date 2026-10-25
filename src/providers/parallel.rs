@@ -29,6 +29,9 @@ const MAX_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const COST_USD_MICROS: u64 = 1000;
 pub const FREE_ALLOWANCE_CENTS: u64 = 500;
 
+// Local pacing cap for the free monthly allowance.
+pub const MAX_REQUESTS_PER_MINUTE: u32 = 20;
+
 pub struct Parallel {
   client: Client,
   api_key: HeaderValue,
@@ -68,9 +71,7 @@ impl SearchProvider for Parallel {
   }
 
   fn requests_per_minute(&self) -> Option<NonZeroU32> {
-    // Default Search API limit; independent of free monetary credits.
-    // https://docs.parallel.ai/getting-started/rate-limits
-    NonZeroU32::new(600)
+    NonZeroU32::new(MAX_REQUESTS_PER_MINUTE)
   }
 
   fn estimate_cost(&self, request: &SearchRequest<'_>) -> ProviderResult<RequestCost> {

@@ -7,10 +7,13 @@ Simple to configure. Simple to operate.
 Each web-search request is handled by **a single** provider, with automatic failover and cooldown. This strategy makes the best use of scarce free web-search capacity.
 
 Four tiers:
+
 1. High-quality search with public access, no account/API key required (3 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai))
-2. High-quality search, free account / API key required (9 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai), [brave](https://search.brave.com), [brightdata](https://brightdata.com), [diffbot](https://diffbot.com), [firecrawl](https://firecrawl.dev), [serpapi](https://serpapi.com), [tavily](https://tavily.com))
-3. Lower-quality search (1 provider: [purili](https://puri.li))
-4. Fall back to narrow but reliable/high-volume providers (1 provider: [hacker news](https://news.ycombinator.com))
+2. High-quality search, free account / API key required, no credit card needed (7 providers: [exa](https://exa.ai), [brightdata](https://brightdata.com), [diffbot](https://diffbot.com), [firecrawl](https://firecrawl.dev), [serpapi](https://serpapi.com), [tavily](https://tavily.com), [context](https://www.context.dev))
+3. High-quality search, free account / API key and credit card required for monthly free credits (2 providers: [parallel](https://parallel.ai), [brave](https://search.brave.com))
+4. Lower-quality search (1 provider: [purili](https://puri.li))
+
+If no general web provider returns results, fall back to narrow but reliable/high-volume sources such as [Hacker News](https://news.ycombinator.com).
 
 A search request is handled by the highest tier with available capacity.
 

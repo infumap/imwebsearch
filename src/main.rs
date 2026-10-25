@@ -258,7 +258,8 @@ async fn run_server(settings: &'static config::file::FileConfig) {
   }
   if config.parallel.is_some() {
     info!(
-      "Parallel Fast search: 600 attempts per rolling minute, $5 recurring monthly credit estimate; reset boundary unknown"
+      "Parallel Fast search: {} attempts per rolling minute; ~5000 searches/month",
+      providers::parallel::MAX_REQUESTS_PER_MINUTE
     );
   }
   if config.purili_max_requests_per_minute > 0 {

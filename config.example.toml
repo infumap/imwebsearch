@@ -13,6 +13,10 @@ filter = "debug"
 
 #### General Web Search Providers
 
+# Default tiers: 1 = public access, 2 = free account without a credit card,
+# 3 = free monthly credits requiring a credit card, 4 = Purili.
+# Lower tier numbers are tried first; each provider's tier can be overridden.
+
 [providers.you]
 # *** ENABLED BY DEFAULT ***
 # https://you.com/docs/agents/mcp-server
@@ -83,21 +87,6 @@ tier = 2
 api_key = ""
 tier = 2
 
-[providers.brave]
-# https://api-dashboard.search.brave.com/documentation/pricing
-# $5/month free - 1,000 searches.
-# Free account and API key required.
-# Credit card required, but set "Monthly usage limit" to "Free credits only".
-api_key = ""
-tier = 2
-
-[providers.parallel]
-# https://parallel.ai/pricing
-# $5 recurring free credits/month - up to 5,000 Fast searches.
-# Free account and API key required.
-api_key = ""
-tier = 2
-
 [providers.brightdata]
 # https://brightdata.com/pricing/mcp-server
 # 5,000 requests/month free - up to 5,000 searches.
@@ -120,13 +109,28 @@ tier = 2
 api_key = ""
 tier = 2
 
+[providers.brave]
+# https://api-dashboard.search.brave.com/documentation/pricing
+# $5/month free - 1,000 searches.
+# Free account and API key required.
+# Credit card required, but set "Monthly usage limit" to "Free credits only".
+api_key = ""
+tier = 3
+
+[providers.parallel]
+# https://parallel.ai/pricing
+# $5 recurring free credits/month - up to 5,000 Fast searches.
+# Free account, API key and credit card required.
+api_key = ""
+tier = 3
+
 [providers.purili]
 # *** ENABLED BY DEFAULT ***
 # https://puri.li/developer/documentation
 # Free public JSON search API. No API key or fixed request quota.
 # Set max_requests_per_minute to 0 to disable.
 max_requests_per_minute = 10
-tier = 3
+tier = 4
 
 
 #### Fallback Search Providers
