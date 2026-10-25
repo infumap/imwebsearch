@@ -189,7 +189,7 @@ async fn fetch_page<B>(req: &Request<B>) -> Response<Full<Bytes>> {
       arguments[name] = json!(value);
     }
   }
-  let result = tools::call_tool_with_metadata("web_fetch", arguments, None).await;
+  let result = tools::call_tool("web_fetch", arguments).await;
   let status = if result["isError"].as_bool().unwrap_or(true) { StatusCode::BAD_GATEWAY } else { StatusCode::OK };
   // Return the exact text content seen by MCP clients, including chunk metadata
   // and errors. Never interpret fetched content as HTML in the browser.

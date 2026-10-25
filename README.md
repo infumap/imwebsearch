@@ -71,3 +71,9 @@ MCP endpoints:
 
 Add either or both as Streamable HTTP MCP servers in [infumap](https://github.com/infumap/infumap) or
 your harness of choice.
+
+`web_search` accepts `query` and an optional `maxResults` (1–30, default 5). Providers may return fewer
+results. `web_fetch` accepts `url`, with optional `maxChars` and `offset` for reading part of a page.
+
+Callers choose search effort through `maxResults`. The server does not interpret caller modes, models or
+per-turn call counts, and does not add search reminders.

@@ -25,8 +25,7 @@ const MAX_MODEL_CHARS: usize = 200;
 /// Serializes appends so concurrent calls never interleave within a line.
 static APPEND: Mutex<()> = Mutex::new(());
 
-/// Append one record without delaying the search. `context` is the host's
-/// `infumap.com/toolCall` metadata, when supplied.
+/// Append one record without delaying the search, with optional local diagnostic labels.
 pub fn record(query: &str, trace: &SearchTrace, context: Option<&Value>) {
   let Some(directory) = config::search_config().ok().and_then(|config| config.state_dir.clone()) else { return };
   let field = |name: &str| context.and_then(|context| context.get(name));

@@ -8,17 +8,15 @@ use serde_json::{Value, json};
 
 use crate::fetch::{self, DEFAULT_MAX_CHARS, MAX_CHARS_CAP};
 use crate::routing::{self, SearchTrace};
-use crate::search::{self, DEFAULT_MAX_RESULTS};
-
-/// Deep research reads more candidates per query. Ten results cost the same as
-/// five with every configured provider; chat keeps five to save context.
-const DEEP_RESEARCH_RESULTS: usize = 10;
+use crate::search::{self, DEFAULT_MAX_RESULTS, MAX_RESULTS_CAP};
 
 /// Unknown arguments, including the former `numResults` and `kind`, are ignored.
 #[derive(Deserialize)]
 struct WebSearchArguments {
   query: Option<String>,
   text: Option<String>,
+  #[serde(rename = "maxResults")]
+  max_results: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -62,6 +60,12 @@ pub fn tools_list(tool: WebTool) -> Value {
           "query": {
             "type": "string",
             "description": "Focused web search query."
+          },
+          "maxResults": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": MAX_RESULTS_CAP,
+            "description": format!("Maximum number of search results to return (default: {DEFAULT_MAX_RESULTS}).")
           }
         },
         "required": ["query"],
@@ -118,46 +122,16 @@ fn tool_result(text: String, is_error: bool) -> Value {
   })
 }
 
-/// Add search-specific guidance using host metadata, never model-supplied arguments.
-/// Other MCP clients can omit this optional context; no server-side counter is kept.
-pub async fn call_tool_with_metadata(name: &str, arguments: Value, metadata: Option<&Value>) -> Value {
-  let context = metadata.and_then(|metadata| metadata.get("infumap.com/toolCall"));
-  let mut result = call_tool_in_context(name, arguments, context).await;
-  let remind = name == "web_search"
-    && context.and_then(|context| context.get("number")).and_then(Value::as_u64) == Some(4)
-    && context.and_then(|context| context.get("mode")).and_then(Value::as_str) == Some("chat");
-  // Keep the response as one JSON object so result previews still parse it.
-  if remind
-    && let Some(text) = result["content"][0]["text"].as_str()
-    && let Ok(Value::Object(mut response)) = serde_json::from_str::<Value>(text)
-  {
-    response.insert(
-      "reminder".to_owned(),
-      json!(
-        "You have used four searches this turn. Answer from the evidence collected unless a specific \
-         unresolved issue materially affects correctness."
-      ),
-    );
-    result["content"][0]["text"] = Value::String(Value::Object(response).to_string());
-  }
-  result
-}
-
-#[cfg(test)]
-async fn call_tool(name: &str, arguments: Value) -> Value {
-  call_tool_in_context(name, arguments, None).await
-}
-
 /// Execute a named tool. Failures are returned as MCP `isError` results, not JSON-RPC errors.
-async fn call_tool_in_context(name: &str, arguments: Value, context: Option<&Value>) -> Value {
+pub async fn call_tool(name: &str, arguments: Value) -> Value {
   match name {
-    "web_search" => call_web_search(arguments, context).await,
+    "web_search" => call_web_search(arguments).await,
     "web_fetch" => call_fetch_page(arguments).await,
     other => tool_result(tool_error_json(&format!("Unknown tool '{other}'.")), true),
   }
 }
 
-async fn call_web_search(arguments: Value, context: Option<&Value>) -> Value {
+async fn call_web_search(arguments: Value) -> Value {
   let arguments: WebSearchArguments = match serde_json::from_value(arguments) {
     Ok(arguments) => arguments,
     Err(e) => {
@@ -168,11 +142,11 @@ async fn call_web_search(arguments: Value, context: Option<&Value>) -> Value {
   if query.trim().is_empty() {
     return tool_result(tool_error_json("web_search tool argument 'query' is required."), true);
   }
-  let deep_research = context.and_then(|context| context.get("mode")).and_then(Value::as_str) == Some("deep_research");
-  let num_results = if deep_research { DEEP_RESEARCH_RESULTS } else { DEFAULT_MAX_RESULTS };
+  let num_results =
+    arguments.max_results.unwrap_or(DEFAULT_MAX_RESULTS as i64).clamp(1, MAX_RESULTS_CAP as i64) as usize;
   let mut trace = SearchTrace::default();
   let response = search::search_web_json(&query, num_results, &mut trace).await;
-  routing::record(query.trim(), &trace, context);
+  routing::record(query.trim(), &trace, None);
   match response {
     Ok(response) => tool_result(response, false),
     Err(e) => {
