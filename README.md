@@ -60,7 +60,7 @@ Optional - for PDF text extraction:
 
 Assuming default host and port config:
 
-- Open `http://127.0.0.1:8791/` in your browser to search. With JavaScript enabled, searches use POST and update results in place, keeping the URL at `/`. Refresh clears the results; individual searches are not added to browser history.
+- Open `http://127.0.0.1:8791/` in your browser to search.
 - Open `http://127.0.0.1:8791/web/status` in your browser for provider availability, quotas and browser relay status.
 - To make it Chrome's default search engine: Settings → Search engine → Manage search engines and site search → Site search → Add, with URL `http://127.0.0.1:8791/search?q=%s`, then choose ⋮ → Make default.
 
