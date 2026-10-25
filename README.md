@@ -4,13 +4,13 @@ Locally hosted meta web-search / web-fetch.
 
 Simple to configure. Simple to operate.
 
-Each web-search request is handled by **a single** provider, with automatic failover and cooldown. This strategy makes best use of scarce free web-search capacity. 
+Each web-search request is handled by **a single** provider, with automatic failover and cooldown. This strategy makes the best use of scarce free web-search capacity.
 
 Four tiers:
-1. High quality search with public access, no account/API key required (3 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai))
-2. High quality search, free account / API key required (9 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai), [brave](https://search.brave.com), [brightdata](https://brightdata.com), [diffbot](https://diffbot.com), [firecrawl](https://firecrawl.dev), [serpapi](https://serpapi.com), [tavily](https://tavily.com))
-3. Lower quality search (1 provider: [purili](https://puri.li))
-4. Fallback to narrow but reliable/high volume providers (1 provider: [hacker news](https://news.ycombinator.com)).
+1. High-quality search with public access, no account/API key required (3 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai))
+2. High-quality search, free account / API key required (9 providers: [you](https://you.com), [exa](https://exa.ai), [parallel](https://parallel.ai), [brave](https://search.brave.com), [brightdata](https://brightdata.com), [diffbot](https://diffbot.com), [firecrawl](https://firecrawl.dev), [serpapi](https://serpapi.com), [tavily](https://tavily.com))
+3. Lower-quality search (1 provider: [purili](https://puri.li))
+4. Fall back to narrow but reliable/high-volume providers (1 provider: [hacker news](https://news.ycombinator.com))
 
 A search request is handled by the highest tier with available capacity.
 
@@ -19,25 +19,25 @@ Tier 1 has enough capacity to be useful (no configuration required, maximally pr
 Use it for:
 - MCP (over HTTP) web search tool for your LLMs.
 - Web search from your browser.
-- Default browser navigation bar web search.
+- Address bar web search.
 
 Does not use any undocumented APIs or tricks to intentionally evade throttling/blocking.
 
-web-fetch extracts and returns page content (i.e. no HTML mark-up), prepended with heading:offset information. The API has optional offset/max_chars parameters. This strategy makes efficient use of valuable LLM context.
+Web-fetch extracts and returns page content as plain text (no HTML markup), prepended with heading:offset information. The API has optional offset/max_chars parameters. This strategy makes efficient use of valuable LLM context.
 
-Includes a Chrome extension to fetch pages via a real browser with user take-over capability for captchas/login (similar to how OpenAI Operator and other automation tools work). Fallback to headless Chrome.
+Includes a Chrome extension to fetch pages via a real browser with user take-over capability for captchas/login (similar to how OpenAI Operator and other automation tools work). Falls back to headless Chrome.
 
-Connect to infumap's [pdf text extraction](https://github.com/infumap/infumap/tree/master/tools/gpu) tool to enable text extraction from pdfs.
+Connect to infumap's [PDF text extraction](https://github.com/infumap/infumap/tree/master/tools/gpu) tool to enable text extraction from PDFs.
 
 ## Running
 
-Make sure you have [rust installed](https://rust-lang.org/tools/install/).
+Make sure you have [Rust installed](https://rust-lang.org/tools/install/).
 
 Then `./run.sh`
 
 This builds `imwebsearch`, downloads Chrome if needed, and starts the server with automatic restarts on failure. Run in `tmux`, or set it up as a service.
 
-Default configuration is created in `~/.imwebsearch/config.toml` on first run. Edit this file to your requirements as per comments in the file.
+A default configuration is created at `~/.imwebsearch/config.toml` on first run. Edit it to suit your requirements, following the comments in the file.
 
 ### Chrome Extension
 
@@ -47,7 +47,7 @@ Optional - for fetching pages through your browser and manual handling of verifi
 2. In a dedicated Chrome profile, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked** and select this repo's `extension/` directory.
 3. Open the extension popup. Enter `ws://127.0.0.1:8791/browser-relay` and the same token, tick **Connect**, then **Save**.
 
-For security, suggest using a sandboxed browser. [Omarchy](https://omarchy.org/), which comes with Chrome pre-installed, is a good option for this.
+For security, we recommend using a sandboxed browser. [Omarchy](https://omarchy.org/), which comes with Chrome pre-installed, is a good option for this.
 
 ### GPU tools
 
@@ -69,5 +69,5 @@ MCP endpoints:
 - Web search: `http://127.0.0.1:8791/mcp/search`
 - Web fetch: `http://127.0.0.1:8791/mcp/fetch`
 
-Add either or both as Streamable HTTP MCP servers in [Infumap](https://github.com/infumap/infumap) or
+Add either or both as Streamable HTTP MCP servers in [infumap](https://github.com/infumap/infumap) or
 your harness of choice.
