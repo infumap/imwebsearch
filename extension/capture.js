@@ -67,7 +67,11 @@ function imwebsearchCapture({limit, dump}) {
     const widgets = document.querySelectorAll('[id*="captcha" i], [class*="captcha" i], [name*="captcha" i], '
       + 'iframe[src*="captcha" i], iframe[src*="challenges.cloudflare.com"], .cf-turnstile, altcha-widget');
     const captcha = [...widgets].some(node => !node.closest('.grecaptcha-badge') && node.getClientRects().length > 0);
-    if ((challenge.test(title) || challenge.test(heading)) && /verify|checking|security|javascript|cookies|human|blocked/.test(text) || captcha) {
+    // DataDome's frame carries t=fe for a captcha and t=bv for a block with nothing to solve.
+    const banned = [...document.querySelectorAll('iframe[src*="captcha-delivery.com"]')].some(node => /[?&]t=bv(&|$)/.test(node.src));
+    if (banned) {
+      blocked = {kind: 'refused', message: "Site's bot protection blocked this browser; there is no challenge to complete."};
+    } else if ((challenge.test(title) || challenge.test(heading)) && /verify|checking|security|javascript|cookies|human|blocked/.test(text) || captcha) {
       blocked = {kind: 'challenge', message: 'Site returned a browser verification challenge; no document text was extracted.'};
     } else if (/^(access denied|403 forbidden)[.!\s]*$/.test(heading || title) && /permission to access|you have been blocked|you don.t have permission|reference #/.test(text)) {
       blocked = {kind: 'refused', message: 'Site refused access to the document.'};

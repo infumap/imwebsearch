@@ -148,7 +148,7 @@ function handle(message) {
 }
 
 async function runJob(request) {
-  const job = {id: request.id, tabId: null, previousTabId: null, ruleIds: [], cancelled: false, challenged: false, notified: false,
+  const job = {id: request.id, tabId: null, previousTabId: null, tabClosed: false, ruleIds: [], cancelled: false, challenged: false, notified: false,
     mainFrames: new Set(), status: null, contentType: null, navError: null, download: null,
     socket, finished: false, debuggerAttached: false, mainFrameId: null, capturingPdf: false, pdfResult: null,
     pdfCaptureStarted: false, pdfRetryUrl: null, pdfRetryStartedAt: null,
@@ -393,6 +393,7 @@ async function render(request, job) {
   let challengeSince = null;
   for (;;) {
     await sleep(100);
+    if (job.tabClosed) throw new Error('The user closed the tab.');
     if (Date.now() >= job.deadline || job.cancelled) {
       if (job.challenged) return {verification_pending: true};
       throw new Error(job.cancelled ? 'Cancelled.' : 'The page did not finish loading before the deadline.');
@@ -479,6 +480,12 @@ function jobForTab(tabId) {
   for (const job of jobs.values()) if (job.tabId === tabId) return job;
   return null;
 }
+
+// Closing a job's tab abandons it, including a challenge the user cannot complete.
+chrome.tabs.onRemoved.addListener(tabId => {
+  const job = jobForTab(tabId);
+  if (job) job.tabClosed = true;
+});
 
 chrome.webRequest.onBeforeRequest.addListener(details => {
   jobForTab(details.tabId)?.mainFrames.add(details.url);

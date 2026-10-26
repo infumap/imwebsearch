@@ -70,7 +70,8 @@ The token and pages travel over unencrypted `ws://`, so do not expose the port p
   55) and `fetch.timeout_secs` bounds each fetch. Keep it below the MCP client's
   timeout (Infumap defaults to 60).
   If time runs out during a challenge, the tab stays open and the model is told to
-  retry after the user completes it.
+  retry after the user completes it. Closing a relayed tab ends its fetch at once
+  with an error, so close it if the page shows nothing to complete.
 - One browser is registered at a time; a new connection replaces the old one.
   The server runs at most two relay fetches at once.
 
