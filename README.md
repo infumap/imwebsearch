@@ -26,6 +26,8 @@ Use it for:
 
 Does not use any undocumented APIs or tricks to intentionally evade throttling/blocking.
 
+Plugin interface that allows you to add your own search provider(s).
+
 Web-fetch extracts and returns page content as plain text (no HTML markup), prepended with heading:offset information. The MCP function has optional offset/max_chars parameters. This strategy makes efficient use of valuable LLM context.
 
 Includes a Chrome extension to fetch pages via a real browser with user take-over capability for captchas/login (similar to how OpenAI Operator and other automation tools work). Falls back to headless Chrome.

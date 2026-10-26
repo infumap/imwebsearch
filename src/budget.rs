@@ -479,7 +479,7 @@ impl BudgetAccount {
   }
 
   fn reconcile(&self, snapshot: &UsageSnapshot, period_start: Option<i64>) -> ProviderResult<()> {
-    let applied = self.store.transaction(|ledger| {
+    self.store.transaction(|ledger| {
       let account = self.state(ledger)?;
       account.advance(Timestamp::now())?;
       if account.period_start != period_start {
@@ -529,13 +529,6 @@ impl BudgetAccount {
       }
       Ok(true)
     })?;
-    debug!(
-      "{} provider usage for period {}: remaining {}, allowance {} USD micros; applied={applied}",
-      self.provider,
-      period_start.map_or_else(|| "None".to_owned(), |timestamp| timestamp.to_string()),
-      snapshot.remaining_usd_micros.map_or_else(|| "None".to_owned(), |remaining| remaining.to_string()),
-      snapshot.allowance_usd_micros.map_or_else(|| "None".to_owned(), |allowance| allowance.to_string())
-    );
     Ok(())
   }
 }
