@@ -163,6 +163,13 @@ pub struct ProviderStatus {
 }
 
 impl ProviderStatus {
+  /// Rate pacing is not an unavailable reason: it is reported through
+  /// `rate_limit.next_request_in_ms`, but still makes the provider unavailable.
+  fn settle_available(&mut self) {
+    self.available =
+      self.unavailable_reasons.is_empty() && self.rate_limit.as_ref().is_none_or(|limit| limit.next_request_in_ms == 0);
+  }
+
   pub fn unconfigured(name: &'static str, reason: &str) -> Self {
     Self {
       name,
@@ -307,6 +314,9 @@ struct Candidate {
   index: usize,
   target: AllocationTarget,
   usage: AllocationUsage,
+  /// Chosen by the status page's "Use next": dispatch skips local health,
+  /// concurrency and pacing checks.
+  forced: bool,
 }
 
 enum Availability {
@@ -409,7 +419,7 @@ impl SearchRouter {
         }
         Err(error) => status.unavailable_reasons.push(error.to_string()),
       }
-      status.available = status.unavailable_reasons.is_empty();
+      status.settle_available();
       providers.push(status);
     }
     providers
@@ -426,8 +436,8 @@ impl SearchRouter {
     self.providers.get(self.forced.load(Ordering::Relaxed)).map(|slot| slot.backend.name())
   }
 
-  /// Prefer `name` for the next selection only. Returns false if this router
-  /// does not hold that provider.
+  /// Send the next selection to `name` whatever its state; see `select`.
+  /// Returns false if this router does not hold that provider.
   pub fn force_next(&self, name: &str) -> bool {
     let Some(index) = self.providers.iter().position(|slot| slot.backend.name() == name) else { return false };
     self.forced.store(index, Ordering::Relaxed);
@@ -476,15 +486,18 @@ impl SearchRouter {
   /// hold that provider.
   pub async fn clear_cooldown(&self, name: &str) -> ProviderResult<bool> {
     let Some(slot) = self.providers.iter().find(|slot| slot.backend.name() == name) else { return Ok(false) };
-    slot.cooldown.clear_cooldown().await?;
-    slot.backend.provider().clear_quota_cooldown().await?;
-    let mut health = slot.health.lock().await;
-    health.failures = 0;
-    health.recovering = false;
-    health.cooldown_until = None;
-    health.quota_reset = None;
+    slot.clear_cooldown().await?;
     info!("Cleared {name} cooldown");
     Ok(true)
+  }
+
+  /// Forget recent request starts for `name`, so local rate pacing allows a
+  /// request now. Returns false if this router does not hold that provider.
+  pub async fn clear_pacing(&self, name: &str) -> bool {
+    let Some(slot) = self.providers.iter().find(|slot| slot.backend.name() == name) else { return false };
+    slot.health.lock().await.request_starts.clear();
+    info!("Cleared {name} pacing");
+    true
   }
 
   pub async fn search(&self, request: SearchRequest<'_>, limits: &SearchLimits) -> ProviderResult<Vec<SearchResult>> {
@@ -537,7 +550,7 @@ impl SearchRouter {
       }
       let slot = &self.providers[candidate.index];
       // Eligibility can change while other requests are selecting a provider.
-      let flight = match slot.acquire(deadline, limits).await {
+      let flight = match slot.acquire(deadline, limits, candidate.forced).await {
         Some(flight) => flight,
         None => {
           attempted[candidate.index] = true;
@@ -656,6 +669,26 @@ impl SearchRouter {
     } else {
       self.forced.swap(NO_FORCED_PROVIDER, Ordering::Relaxed)
     };
+    // The operator asked for this provider whatever its state: skip pause,
+    // cooldown, pacing, tier and allocation ranking. Monetary budgets still
+    // apply, so a provider without free credit falls back to normal selection.
+    if let Some(slot) = self.providers.get(forced) {
+      let name = slot.backend.name();
+      let recent = usage.remove(slot.backend.provider().name()).unwrap_or_default();
+      let candidate = match slot.clear_cooldown().await {
+        Ok(()) => slot.candidate(forced, request, recent).await,
+        Err(error) => Err(error),
+      };
+      match candidate {
+        Ok(Some(candidate)) => return Some(Candidate { forced: true, ..candidate }),
+        Ok(None) => {
+          info!("[search {search_id}] {name} was forced but has no quota or free credit available; selecting normally")
+        }
+        Err(error) => {
+          info!("[search {search_id}] {name} was forced but could not be used ({error}); selecting normally")
+        }
+      }
+    }
     let mut active_tier = None;
     let mut candidates = Vec::new();
     for (index, slot) in self.providers.iter().enumerate() {
@@ -697,16 +730,6 @@ impl SearchRouter {
           }
         }
       }
-    }
-    if let Some(position) = candidates.iter().position(|candidate| candidate.index == forced) {
-      return Some(candidates.swap_remove(position));
-    }
-    if let Some(slot) = self.providers.get(forced) {
-      info!(
-        "[search {search_id}] {} was forced but is unavailable ({}); selecting normally",
-        slot.backend.name(),
-        reasons[forced].as_deref().unwrap_or("already attempted")
-      );
     }
     candidates
       .into_iter()
@@ -775,7 +798,7 @@ impl ProviderSlot {
     if status.paused {
       status.unavailable_reasons.push("Paused from the status page.".to_owned());
     }
-    if let Some(reason) = self.unavailable(&mut health) {
+    if let Some(reason) = self.blocked(&mut health) {
       status.unavailable_reasons.push(reason.to_owned());
     }
     match self.cooldown.snapshot().await {
@@ -858,7 +881,7 @@ impl ProviderSlot {
       }
       Err(error) => status.unavailable_reasons.push(error.to_string()),
     }
-    status.available = status.unavailable_reasons.is_empty();
+    status.settle_available();
     status
   }
 
@@ -973,11 +996,18 @@ impl ProviderSlot {
     }
   }
 
-  fn unavailable(&self, health: &mut Health) -> Option<&'static str> {
+  /// Reasons other than local rate pacing, which status reports separately.
+  fn blocked(&self, health: &mut Health) -> Option<&'static str> {
     health.unavailable().or_else(|| {
-      if self.max_concurrent_requests.is_some_and(|limit| health.in_flight >= limit.get() as usize) {
-        return Some("provider concurrency limit reached");
-      }
+      self
+        .max_concurrent_requests
+        .is_some_and(|limit| health.in_flight >= limit.get() as usize)
+        .then_some("provider concurrency limit reached")
+    })
+  }
+
+  fn unavailable(&self, health: &mut Health) -> Option<&'static str> {
+    self.blocked(health).or_else(|| {
       let now = Instant::now();
       self
         .rate_limit
@@ -1051,12 +1081,12 @@ impl ProviderSlot {
       Backend::Unmetered { .. } => None,
     };
     let target = self.allocation_target(cost, quota.as_ref(), balance.as_ref())?;
-    Ok(Some(Candidate { index, target, usage }))
+    Ok(Some(Candidate { index, target, usage, forced: false }))
   }
 
-  async fn acquire(&self, deadline: Instant, limits: &SearchLimits) -> Option<Flight> {
+  async fn acquire(&self, deadline: Instant, limits: &SearchLimits, forced: bool) -> Option<Flight> {
     let mut health = self.health.lock().await;
-    if self.unavailable(&mut health).is_some() {
+    if !forced && self.unavailable(&mut health).is_some() {
       return None;
     }
     let in_flight = health.in_flight.checked_add(1)?;
@@ -1078,6 +1108,19 @@ impl ProviderSlot {
       failures: health.failures,
       finished: false,
     })
+  }
+
+  /// Forget local and persisted cooldowns, as a success would. Disabled
+  /// providers stay disabled.
+  async fn clear_cooldown(&self) -> ProviderResult<()> {
+    self.cooldown.clear_cooldown().await?;
+    self.backend.provider().clear_quota_cooldown().await?;
+    let mut health = self.health.lock().await;
+    health.failures = 0;
+    health.recovering = false;
+    health.cooldown_until = None;
+    health.quota_reset = None;
+    Ok(())
   }
 
   async fn record_failure(&self, error: &ProviderError) {

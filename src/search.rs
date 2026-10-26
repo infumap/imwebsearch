@@ -420,6 +420,16 @@ pub async fn clear_provider_cooldown(name: &str) -> InfuResult<bool> {
   Ok(found)
 }
 
+/// Clear `name`'s local rate pacing in whichever pool holds it. Returns false
+/// for an unknown or disabled provider.
+pub async fn clear_provider_pacing(name: &str) -> InfuResult<bool> {
+  let mut found = false;
+  for pool in configured_pools()? {
+    found |= pool.router.clear_pacing(name).await;
+  }
+  Ok(found)
+}
+
 /// Pause or resume `name` in whichever pool holds it. Returns false for an
 /// unknown or disabled provider.
 pub async fn set_provider_paused(name: &str, paused: bool) -> InfuResult<bool> {
@@ -430,8 +440,8 @@ pub async fn set_provider_paused(name: &str, paused: bool) -> InfuResult<bool> {
   Ok(found)
 }
 
-/// Try general-web provider `name` first for the next search only, clearing
-/// any cooldown so that request is sent. It acts as an early recovery probe: a
+/// Send the next search to general-web provider `name` whatever its local
+/// state, except a monetary budget. It acts as an early recovery probe: a
 /// success restores the provider and a failure starts a fresh cooldown.
 /// Returns false for an unknown or disabled provider.
 pub async fn force_next_provider(name: &str) -> InfuResult<bool> {

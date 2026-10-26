@@ -66,6 +66,11 @@ fn enabled(provider: &Value) -> bool {
   provider["enabled"].as_bool() == Some(true)
 }
 
+/// Unavailable for a reason other than local rate pacing.
+fn has_reasons(provider: &Value) -> bool {
+  provider["unavailable_reasons"].as_array().is_some_and(|reasons| !reasons.is_empty())
+}
+
 fn paused(provider: &Value) -> bool {
   provider["paused"].as_bool() == Some(true)
 }
@@ -297,7 +302,7 @@ fn provider_table(content: &mut String, heading: &str, providers: &[Value], now:
         ("Paused", "paused")
       } else if ready(provider) {
         ("Ready", "ready")
-      } else if provider["available"].as_bool() == Some(true) {
+      } else if !has_reasons(provider) {
         ("Paced", "waiting")
       } else {
         ("Unavailable", "blocked")
@@ -364,18 +369,18 @@ fn provider_table(content: &mut String, heading: &str, providers: &[Value], now:
 fn actions(content: &mut String, provider: &Value, fallback: bool) {
   let name = escape(provider["name"].as_str().unwrap_or_default());
   content.push_str("<div class=status-actions>");
+  if !fallback {
+    let _ = write!(
+      content,
+      "<form method=post action=\"/web/status/force-next?provider={name}\"><button aria-label=\"Use {name} next\" title=\"Sends the next search to this provider whatever its state, unless that would spend paid credit.\">Use next</button></form>"
+    );
+  }
   if paused(provider) {
     let _ = write!(
       content,
       "<form method=post action=\"/web/status/resume?provider={name}\"><button aria-label=\"Resume {name}\" title=\"Route searches to this provider again.\">Resume</button></form>"
     );
   } else {
-    if !fallback {
-      let _ = write!(
-        content,
-        "<form method=post action=\"/web/status/force-next?provider={name}\"><button aria-label=\"Use {name} next\" title=\"Clears any cooldown, then tries this provider first for the next search.\">Use next</button></form>"
-      );
-    }
     let _ = write!(
       content,
       "<form method=post action=\"/web/status/pause?provider={name}\"><button aria-label=\"Pause {name}\" title=\"Stop routing searches to this provider until resumed, including after a restart.\">Pause</button></form>"
@@ -482,6 +487,11 @@ fn timing_cell(content: &mut String, provider: &Value, now: i64) {
   let pacing = rate["next_request_in_ms"].as_u64().unwrap_or(0).div_ceil(1000);
   if pacing > 0 {
     let _ = write!(content, "<p class=status-note>Next rate slot in {}</p>", duration(pacing));
+    let name = escape(provider["name"].as_str().unwrap_or_default());
+    let _ = write!(
+      content,
+      "<form class=status-clear method=post action=\"/web/status/clear-pacing?provider={name}\"><button aria-label=\"Clear {name} pacing\" title=\"Forget recent requests so the local rate limit allows one now.\">Clear pacing</button></form>"
+    );
   }
   let health = &provider["health"];
   let cooldown = health["cooldown_remaining_ms"].as_u64().unwrap_or(0).div_ceil(1000);
@@ -493,7 +503,7 @@ fn timing_cell(content: &mut String, provider: &Value, now: i64) {
   ));
   if retry > 0 {
     let _ = write!(content, "<p class=status-note>Retry eligible in {}</p>", duration(retry));
-  } else if provider["available"].as_bool() != Some(true) && !paused(provider) {
+  } else if has_reasons(provider) && !paused(provider) {
     content.push_str("<p class=status-note>Retry time unknown</p>");
   }
   if health["recovery_probe_required"].as_bool() == Some(true) {

@@ -15,11 +15,18 @@ use crate::{fetch, plugin, protocol, search, web};
 
 /// Operator actions posted from the status page.
 pub fn handles_action(path: &str) -> bool {
-  matches!(path, "/web/status/clear-cooldown" | "/web/status/force-next" | "/web/status/pause" | "/web/status/resume")
+  matches!(
+    path,
+    "/web/status/clear-cooldown"
+      | "/web/status/clear-pacing"
+      | "/web/status/force-next"
+      | "/web/status/pause"
+      | "/web/status/resume"
+  )
 }
 
 /// Operator endpoint: no provider calls, reservations, ledger writes or keys,
-/// except the explicit cooldown, force-next and pause actions.
+/// except the explicit cooldown, pacing, force-next and pause actions.
 pub async fn handle_http<B>(req: &Request<B>) -> Response<Full<Bytes>> {
   let path = req.uri().path().trim_end_matches('/');
   let html = path.starts_with("/web/status");
@@ -106,6 +113,7 @@ async fn action<B>(req: &Request<B>, path: &str) -> Response<Full<Bytes>> {
   };
   let result = match path {
     "/web/status/clear-cooldown" => search::clear_provider_cooldown(&provider).await,
+    "/web/status/clear-pacing" => search::clear_provider_pacing(&provider).await,
     "/web/status/pause" => search::set_provider_paused(&provider, true).await,
     "/web/status/resume" => search::set_provider_paused(&provider, false).await,
     _ => search::force_next_provider(&provider).await,
