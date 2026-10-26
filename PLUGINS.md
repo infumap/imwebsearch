@@ -281,7 +281,7 @@ shows each page in a tab. Declare `max_concurrent` and a modest
 Lines sent by imwebsearch are marked `>`, plugin replies `<`.
 
 ```
-> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"imwebsearch","version":"0.8.0"}}}
+> {"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"imwebsearch","version":"0.1.0"}}}
 < {"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"acme","version":"1.0.0"}}}
 > {"jsonrpc":"2.0","method":"notifications/initialized"}
 > {"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"acme_news","arguments":{"query":"rust async cancellation","max_results":5}}}

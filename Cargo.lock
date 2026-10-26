@@ -1018,7 +1018,7 @@ dependencies = [
 
 [[package]]
 name = "imwebsearch"
-version = "0.8.0"
+version = "0.1.0"
 dependencies = [
  "async-tungstenite",
  "base64 0.22.1",
