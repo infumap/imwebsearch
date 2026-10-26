@@ -62,7 +62,12 @@ function imwebsearchCapture({limit, dump}) {
   if (bodyText.length < 1600) {
     const text = bodyText.toLowerCase();
     const challenge = /^(just a moment|attention required|verify you are human|checking your browser)[.!…\s|:-]*(cloudflare)?/;
-    if ((challenge.test(title) || challenge.test(heading)) && /verify|checking|security|javascript|cookies|human|blocked/.test(text)) {
+    // A visible captcha widget on a page with little else is a challenge, whatever
+    // its wording. reCAPTCHA v3's invisible badge appears on ordinary pages.
+    const widgets = document.querySelectorAll('[id*="captcha" i], [class*="captcha" i], [name*="captcha" i], '
+      + 'iframe[src*="captcha" i], iframe[src*="challenges.cloudflare.com"], .cf-turnstile, altcha-widget');
+    const captcha = [...widgets].some(node => !node.closest('.grecaptcha-badge') && node.getClientRects().length > 0);
+    if ((challenge.test(title) || challenge.test(heading)) && /verify|checking|security|javascript|cookies|human|blocked/.test(text) || captcha) {
       blocked = {kind: 'challenge', message: 'Site returned a browser verification challenge; no document text was extracted.'};
     } else if (/^(access denied|403 forbidden)[.!\s]*$/.test(heading || title) && /permission to access|you have been blocked|you don.t have permission|reference #/.test(text)) {
       blocked = {kind: 'refused', message: 'Site refused access to the document.'};
