@@ -49,6 +49,22 @@ a:focus-visible, button:focus-visible { outline: 2px solid #475569; outline-offs
 .empty { padding: 28px 0; }
 .empty h2 { font-size: 20px; font-weight: 600; }
 .empty p { color: var(--muted); font-size: 14px; line-height: 1.6; }
+.fetched main { width: min(100% - 48px, 860px); }
+.fetched-meta { padding-bottom: 12px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 13px; }
+.fetched-meta h1 { margin: 0 0 6px; font-size: 18px; font-weight: 500; overflow-wrap: anywhere; }
+.fetched-meta h1 a { color: #2563eb; text-decoration: none; }
+.fetched-meta h1 a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.fetched-meta p { margin: 4px 0; overflow-wrap: anywhere; }
+.fetched-outline { margin: 16px 0; font-size: 14px; }
+.fetched-outline summary { cursor: pointer; color: #475569; }
+.fetched-outline ul { margin: 8px 0 0; padding: 0; list-style: none; line-height: 1.8; }
+.fetched-outline a { color: #2563eb; text-decoration: none; }
+.fetched-outline a:hover { text-decoration: underline; }
+.fetched-outline .level-2 { padding-left: 16px; } .fetched-outline .level-3 { padding-left: 32px; }
+.fetched-outline .level-4, .fetched-outline .level-5, .fetched-outline .level-6 { padding-left: 48px; }
+.fetched-text { margin: 20px 0; font: inherit; font-size: 15px; line-height: 1.75; color: #1f2937; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fetched-nav { display: flex; gap: 20px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 14px; }
+.fetched-nav a { color: #2563eb; }
 .status main { width: min(100% - 48px, 1240px); }
 .status-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .status-heading h1 { margin: 0; font-size: 24px; font-weight: 600; }

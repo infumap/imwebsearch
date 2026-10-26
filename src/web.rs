@@ -15,7 +15,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use log::warn;
 use once_cell::sync::Lazy;
 use reqwest::Url;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 mod status;
@@ -236,14 +236,87 @@ async fn fetch_page<B>(req: &Request<B>) -> Response<Full<Bytes>> {
       arguments[name] = json!(value);
     }
   }
-  let result = tools::call_tool("web_fetch", arguments).await;
+  let result = tools::call_tool("web_fetch", arguments.clone()).await;
   let status = if result["isError"].as_bool().unwrap_or(true) { StatusCode::BAD_GATEWAY } else { StatusCode::OK };
-  // Return the exact text content seen by MCP clients, including chunk metadata
-  // and errors. Never interpret fetched content as HTML in the browser.
-  match result["content"][0]["text"].as_str() {
-    Some(text) => response(status, TEXT, text.to_owned()),
-    None => response(StatusCode::INTERNAL_SERVER_ERROR, TEXT, "Fetch returned no text."),
+  let Some(text) = result["content"][0]["text"].as_str() else {
+    return response(StatusCode::INTERNAL_SERVER_ERROR, TEXT, "Fetch returned no text.");
+  };
+  // `format=json` returns the exact text content seen by MCP clients.
+  if parameter(req, "format").as_deref() == Some("json") {
+    return response(status, TEXT, text.to_owned());
   }
+  let fetched: Value = serde_json::from_str(text).unwrap_or_else(|_| json!({ "error": text }));
+  let content = fetched_content(&url, &arguments, &fetched);
+  let title = fetched["finalUrl"].as_str().unwrap_or(&url);
+  response(status, HTML, document(&format!("{title} — IMWebSearch"), "fetched", &content))
+}
+
+/// Fetched text is escaped and shown preformatted; never interpret it as HTML.
+fn fetched_content(url: &str, arguments: &Value, fetched: &Value) -> String {
+  let max_chars = arguments["maxChars"].as_i64();
+  let fetch_link = |offset: u64, format: Option<&str>| {
+    let mut link = Url::parse("http://localhost/fetch").expect("Static URL is valid");
+    let mut pairs = link.query_pairs_mut();
+    pairs.append_pair("url", url);
+    if let Some(max_chars) = max_chars {
+      pairs.append_pair("maxChars", &max_chars.to_string());
+    }
+    if offset > 0 {
+      pairs.append_pair("offset", &offset.to_string());
+    }
+    if let Some(format) = format {
+      pairs.append_pair("format", format);
+    }
+    drop(pairs);
+    escape(&format!("/fetch?{}", link.query().unwrap_or_default()))
+  };
+  // Error responses carry no offset; keep the requested one for the raw view.
+  let offset = fetched["offset"].as_u64().or(arguments["offset"].as_u64()).unwrap_or(0);
+  let raw = fetch_link(offset, Some("json"));
+
+  let final_url = fetched["finalUrl"].as_str().unwrap_or(url);
+  let href = if public_link(final_url) { escape(final_url) } else { String::new() };
+  let mut content = format!(
+    "<div class=fetched-meta><h1><a href=\"{href}\" target=_blank rel=\"noopener noreferrer\">{}</a></h1>",
+    escape(final_url)
+  );
+  if fetched["hostChanged"].as_bool() == Some(true) {
+    let _ = write!(content, "<p>Redirected from {}</p>", escape(url));
+  }
+  if let Some(error) = fetched["error"].as_str() {
+    let _ = write!(content, "</div><p class=notice role=alert>{}</p>", escape(error));
+    let _ = write!(content, "<p class=fetched-nav><a href=\"{raw}\">View JSON</a></p>");
+    return content;
+  }
+  let text = fetched["text"].as_str().unwrap_or_default();
+  let total = fetched["totalChars"].as_u64().unwrap_or(0);
+  let end = fetched["nextOffset"].as_u64().unwrap_or(total);
+  let _ = write!(content, "<p>Characters {offset}–{end} of {total} · <a href=\"{raw}\">View JSON</a></p></div>");
+  if let Some(outline) = fetched["outline"].as_array().filter(|outline| !outline.is_empty()) {
+    content.push_str("<details class=fetched-outline><summary>Outline</summary><ul>");
+    for heading in outline {
+      let level = heading["level"].as_u64().unwrap_or(1).clamp(1, 6);
+      let _ = write!(
+        content,
+        "<li class=level-{level}><a href=\"{}\">{}</a></li>",
+        fetch_link(heading["offset"].as_u64().unwrap_or(0), None),
+        escape(heading["heading"].as_str().unwrap_or_default()),
+      );
+    }
+    content.push_str("</ul></details>");
+  }
+  let _ = write!(content, "<pre class=fetched-text>{}</pre>", escape(text));
+  let mut nav = String::new();
+  if offset > 0 {
+    let _ = write!(nav, "<a href=\"{}\">← Start</a>", fetch_link(0, None));
+  }
+  if let Some(next) = fetched["nextOffset"].as_u64() {
+    let _ = write!(nav, "<a href=\"{}\">Next part →</a>", fetch_link(next, None));
+  }
+  if !nav.is_empty() {
+    let _ = write!(content, "<p class=fetched-nav>{nav}</p>");
+  }
+  content
 }
 
 fn provider_homepage(provider: &str) -> Option<&'static str> {
