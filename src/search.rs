@@ -442,6 +442,11 @@ pub async fn force_next_provider(name: &str) -> InfuResult<bool> {
   Ok(router.force_next(name))
 }
 
+/// The general-web provider the next search tries first, if one is forced.
+pub fn forced_next_provider() -> Option<&'static str> {
+  configured_router().ok()?.forced_next()
+}
+
 fn configured_router() -> InfuResult<&'static SearchRouter> {
   ROUTER.as_ref().map_err(|error| error.to_string().into())
 }

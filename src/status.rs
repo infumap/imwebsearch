@@ -114,7 +114,9 @@ async fn action<B>(req: &Request<B>, path: &str) -> Response<Full<Bytes>> {
     Ok(true) => {
       let mut response = Response::new(Full::new(Bytes::new()));
       *response.status_mut() = StatusCode::SEE_OTHER;
-      response.headers_mut().insert(LOCATION, hyper::header::HeaderValue::from_static("/web/status"));
+      // After forcing a provider, go straight to a focused search box.
+      let location = if path == "/web/status/force-next" { "/" } else { "/web/status" };
+      response.headers_mut().insert(LOCATION, hyper::header::HeaderValue::from_static(location));
       response.headers_mut().insert(CACHE_CONTROL, hyper::header::HeaderValue::from_static("no-store"));
       response
     }

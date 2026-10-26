@@ -68,7 +68,7 @@ where
     return result;
   }
   match req.uri().path() {
-    "/" => response(StatusCode::OK, HTML, page("", "", StatusCode::OK)),
+    "/" => response(StatusCode::OK, HTML, page("", &forced_next_notice(), StatusCode::OK)),
     "/search.css" => response(StatusCode::OK, "text/css; charset=utf-8", include_str!("web/search.css")),
     "/search.js" => response(StatusCode::OK, "text/javascript; charset=utf-8", include_str!("web/search.js")),
     "/infumap.png" => {
@@ -81,6 +81,14 @@ where
     "/fetch" => fetch_page(&req).await,
     _ => response(StatusCode::NOT_FOUND, TEXT, "Not found."),
   }
+}
+
+/// Reflect a status-page "Use next" on the home page. Any client's next
+/// search, including an MCP client's, consumes it.
+fn forced_next_notice() -> String {
+  search::forced_next_provider().map_or_else(String::new, |name| {
+    format!("<p class=notice>The next search tries <strong>{}</strong> first.</p>", escape(name))
+  })
 }
 
 async fn post_search<B>(req: Request<B>) -> Response<Full<Bytes>>

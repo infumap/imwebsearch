@@ -421,6 +421,11 @@ impl SearchRouter {
     }
   }
 
+  /// The provider the next selection prefers, if one is forced.
+  pub fn forced_next(&self) -> Option<&'static str> {
+    self.providers.get(self.forced.load(Ordering::Relaxed)).map(|slot| slot.backend.name())
+  }
+
   /// Prefer `name` for the next selection only. Returns false if this router
   /// does not hold that provider.
   pub fn force_next(&self, name: &str) -> bool {
