@@ -15,11 +15,11 @@ use crate::{fetch, plugin, protocol, search, web};
 
 /// Operator actions posted from the status page.
 pub fn handles_action(path: &str) -> bool {
-  matches!(path, "/web/status/clear-cooldown" | "/web/status/force-next")
+  matches!(path, "/web/status/clear-cooldown" | "/web/status/force-next" | "/web/status/pause" | "/web/status/resume")
 }
 
 /// Operator endpoint: no provider calls, reservations, ledger writes or keys,
-/// except the explicit cooldown and force-next actions.
+/// except the explicit cooldown, force-next and pause actions.
 pub async fn handle_http<B>(req: &Request<B>) -> Response<Full<Bytes>> {
   let path = req.uri().path().trim_end_matches('/');
   let html = path.starts_with("/web/status");
@@ -104,10 +104,11 @@ async fn action<B>(req: &Request<B>, path: &str) -> Response<Full<Bytes>> {
   let Some(provider) = url.query_pairs().find(|(key, _)| key == "provider").map(|(_, value)| value.into_owned()) else {
     return response(StatusCode::BAD_REQUEST, json!({ "error": "Missing provider." }), true);
   };
-  let result = if path == "/web/status/clear-cooldown" {
-    search::clear_provider_cooldown(&provider).await
-  } else {
-    search::force_next_provider(&provider).await
+  let result = match path {
+    "/web/status/clear-cooldown" => search::clear_provider_cooldown(&provider).await,
+    "/web/status/pause" => search::set_provider_paused(&provider, true).await,
+    "/web/status/resume" => search::set_provider_paused(&provider, false).await,
+    _ => search::force_next_provider(&provider).await,
   };
   match result {
     Ok(true) => {

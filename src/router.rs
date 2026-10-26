@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, VecDeque};
 use std::num::NonZeroU32;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use jiff::Timestamp;
@@ -119,6 +119,10 @@ struct ProviderSlot {
   max_concurrent_requests: Option<NonZeroU32>,
   health: Arc<Mutex<Health>>,
   usage_status: Mutex<UsageStatus>,
+  /// Operator pause from the status page. The marker file's presence persists
+  /// it across restarts.
+  paused: AtomicBool,
+  pause_marker: PathBuf,
 }
 
 #[derive(Clone, Default)]
@@ -151,6 +155,8 @@ pub struct ProviderStatus {
   pub allocation: Option<AllocationStatus>,
   #[serde(skip_serializing_if = "std::ops::Not::not")]
   pub forced_next: bool,
+  #[serde(skip_serializing_if = "std::ops::Not::not")]
+  pub paused: bool,
   // Keep the existing status field name for provider-neutral request quotas.
   #[serde(skip_serializing_if = "Option::is_none")]
   pub daily_quota: Option<RequestQuotaSnapshot>,
@@ -173,6 +179,7 @@ impl ProviderStatus {
       daily_quota: None,
       allocation: None,
       forced_next: false,
+      paused: false,
     }
   }
 }
@@ -360,6 +367,8 @@ impl SearchRouter {
             minimum_interval,
           });
           let max_concurrent_requests = backend.provider().max_concurrent_requests();
+          let pause_marker = directory.join(format!("{}-paused", backend.provider().name()));
+          let paused = pause_marker.try_exists().map_err(|_| internal("Could not read provider pause marker."))?;
           Ok(ProviderSlot {
             backend,
             tier,
@@ -369,6 +378,8 @@ impl SearchRouter {
             max_concurrent_requests,
             health: Arc::default(),
             usage_status: Mutex::default(),
+            paused: AtomicBool::new(paused),
+            pause_marker,
           })
         })
         .collect::<ProviderResult<_>>()?,
@@ -417,6 +428,42 @@ impl SearchRouter {
     self.forced.store(index, Ordering::Relaxed);
     info!("{name} will be tried first for the next search");
     true
+  }
+
+  /// Exclude `name` from selection until resumed, across restarts. Unlike a
+  /// cooldown, nothing but the operator lifts it. Returns false if this router
+  /// does not hold that provider.
+  pub async fn set_paused(&self, name: &str, paused: bool) -> ProviderResult<bool> {
+    let Some(index) = self.providers.iter().position(|slot| slot.backend.name() == name) else { return Ok(false) };
+    let slot = &self.providers[index];
+    let marker = slot.pause_marker.clone();
+    let persisted = tokio::task::spawn_blocking(move || {
+      if paused {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create(true).truncate(false);
+        #[cfg(unix)]
+        {
+          use std::os::unix::fs::OpenOptionsExt;
+          options.mode(0o600);
+        }
+        options.open(&marker).map(drop)
+      } else {
+        std::fs::remove_file(&marker).or_else(|error| match error.kind() {
+          std::io::ErrorKind::NotFound => Ok(()),
+          _ => Err(error),
+        })
+      }
+    })
+    .await;
+    if !matches!(persisted, Ok(Ok(()))) {
+      return Err(internal("Could not update provider pause marker."));
+    }
+    slot.paused.store(paused, Ordering::Relaxed);
+    if paused {
+      let _ = self.forced.compare_exchange(index, NO_FORCED_PROVIDER, Ordering::Relaxed, Ordering::Relaxed);
+    }
+    info!("{name} {}", if paused { "paused from the status page" } else { "resumed from the status page" });
+    Ok(true)
   }
 
   /// Forget local and persisted cooldowns for `name`, as a success would.
@@ -719,6 +766,10 @@ impl ProviderSlot {
     // Expiry cleanup must only change this copy during inspection. Release the
     // health lock before waiting for any budget operation.
     let mut health = self.health.lock().await.clone();
+    status.paused = self.paused.load(Ordering::Relaxed);
+    if status.paused {
+      status.unavailable_reasons.push("Paused from the status page.".to_owned());
+    }
     if let Some(reason) = self.unavailable(&mut health) {
       status.unavailable_reasons.push(reason.to_owned());
     }
@@ -807,6 +858,10 @@ impl ProviderSlot {
   }
 
   async fn availability(&self) -> Availability {
+    // Paused, not Blocked: a paused provider must not hold its tier open.
+    if self.paused.load(Ordering::Relaxed) {
+      return Availability::Paused("paused from the status page");
+    }
     match self.cooldown.snapshot().await {
       Ok(quota) if quota.persistence_error.is_some() => {
         return Availability::Blocked("provider cooldown ledger is unavailable");
@@ -895,6 +950,9 @@ impl ProviderSlot {
 
   /// Persisted cooldowns survive restarts and silently exclude a provider.
   async fn log_persisted_cooldown(&self) {
+    if self.paused.load(Ordering::Relaxed) {
+      info!("{} is paused (persisted from an earlier run); resume it from the status page", self.backend.name());
+    }
     if let Ok(snapshot) = self.cooldown.snapshot().await
       && let Some(until) = snapshot.remote_exhausted_until_ms
     {

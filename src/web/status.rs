@@ -66,6 +66,15 @@ fn enabled(provider: &Value) -> bool {
   provider["enabled"].as_bool() == Some(true)
 }
 
+fn paused(provider: &Value) -> bool {
+  provider["paused"].as_bool() == Some(true)
+}
+
+/// Enabled and not paused: the providers that totals and ready counts cover.
+fn active(provider: &Value) -> bool {
+  enabled(provider) && !paused(provider)
+}
+
 fn ready(provider: &Value) -> bool {
   provider["available"].as_bool() == Some(true)
     && provider["rate_limit"]["next_request_in_ms"].as_u64().unwrap_or(0) == 0
@@ -158,7 +167,7 @@ pub fn page(status: StatusCode, snapshot: &Value) -> Response<Full<Bytes>> {
 }
 
 fn overview(content: &mut String, providers: &[Value]) {
-  let active: Vec<_> = providers.iter().filter(|provider| enabled(provider)).collect();
+  let active: Vec<_> = providers.iter().filter(|provider| active(provider)).collect();
   let ready_count = active.iter().filter(|provider| ready(provider)).count();
   let mut left = 0.0;
   let mut ready_left = 0.0;
@@ -210,7 +219,7 @@ fn overview(content: &mut String, providers: &[Value]) {
     content,
     "General web providers ready now",
     &format!("{ready_count} / {}", active.len()),
-    "Enabled providers; excludes current cooldowns and pacing waits.",
+    "Enabled providers, excluding paused ones; excludes current cooldowns and pacing waits.",
   );
   let (estimate_label, timeframe_note) = match (daily_allowances > 0, credit_allowances > 0) {
     (true, false) => ("Estimated searches left (rolling 24h)", String::new()),
@@ -268,22 +277,25 @@ fn metric(content: &mut String, label: &str, value: &str, note: &str) {
 }
 
 fn provider_table(content: &mut String, heading: &str, providers: &[Value], now: i64, fallback: bool) {
-  let active: Vec<_> = providers.iter().filter(|provider| enabled(provider)).collect();
+  // Paused providers stay listed so they can be resumed.
+  let listed: Vec<_> = providers.iter().filter(|provider| enabled(provider)).collect();
   let _ = write!(content, "<section class=status-section><h2>{}</h2>", escape(heading));
   if fallback {
-    let count = active.iter().filter(|provider| ready(provider)).count();
+    let count = listed.iter().filter(|provider| active(provider) && ready(provider)).count();
     let _ = write!(
       content,
       "<p class=status-note>{count} / {} ready. Used when general web search returns no results; excluded from the totals above.</p>",
-      active.len()
+      listed.iter().filter(|provider| active(provider)).count()
     );
   }
-  if active.is_empty() {
+  if listed.is_empty() {
     content.push_str("<p class=status-note>No providers enabled.</p>");
   } else {
     content.push_str("<div class=status-table-wrap><table class=status-table><thead><tr><th scope=col>Provider / availability</th><th scope=col>Allowance / remaining</th><th scope=col>Last 24 hours</th><th scope=col>Pacing / renewal</th></tr></thead><tbody>");
-    for provider in active {
-      let (state, class) = if ready(provider) {
+    for provider in listed {
+      let (state, class) = if paused(provider) {
+        ("Paused", "paused")
+      } else if ready(provider) {
         ("Ready", "ready")
       } else if provider["available"].as_bool() == Some(true) {
         ("Paced", "waiting")
@@ -292,7 +304,7 @@ fn provider_table(content: &mut String, heading: &str, providers: &[Value], now:
       };
       let _ = write!(
         content,
-        "<tr><th scope=row><span class=provider-name>{}</span><span class=\"provider-state {class}\">{state}</span>",
+        "<tr class={class}><th scope=row><span class=provider-name>{}</span><span class=\"provider-state {class}\">{state}</span>",
         escape(provider["name"].as_str().unwrap_or("Unknown"))
       );
       if let Some(tier) = provider["tier"].as_u64() {
@@ -352,14 +364,21 @@ fn provider_table(content: &mut String, heading: &str, providers: &[Value], now:
 fn actions(content: &mut String, provider: &Value, fallback: bool) {
   let name = escape(provider["name"].as_str().unwrap_or_default());
   content.push_str("<div class=status-actions>");
-  let _ = write!(
-    content,
-    "<form method=post action=\"/web/status/clear-cooldown?provider={name}\"><button>Clear cooldown</button></form>"
-  );
-  if !fallback {
+  if paused(provider) {
     let _ = write!(
       content,
-      "<form method=post action=\"/web/status/force-next?provider={name}\"><button title=\"Clears any cooldown, then tries this provider first for the next search.\">Use next</button></form>"
+      "<form method=post action=\"/web/status/resume?provider={name}\"><button aria-label=\"Resume {name}\" title=\"Route searches to this provider again.\">Resume</button></form>"
+    );
+  } else {
+    if !fallback {
+      let _ = write!(
+        content,
+        "<form method=post action=\"/web/status/force-next?provider={name}\"><button aria-label=\"Use {name} next\" title=\"Clears any cooldown, then tries this provider first for the next search.\">Use next</button></form>"
+      );
+    }
+    let _ = write!(
+      content,
+      "<form method=post action=\"/web/status/pause?provider={name}\"><button aria-label=\"Pause {name}\" title=\"Stop routing searches to this provider until resumed, including after a restart.\">Pause</button></form>"
     );
   }
   content.push_str("</div>");
@@ -474,11 +493,23 @@ fn timing_cell(content: &mut String, provider: &Value, now: i64) {
   ));
   if retry > 0 {
     let _ = write!(content, "<p class=status-note>Retry eligible in {}</p>", duration(retry));
-  } else if provider["available"].as_bool() != Some(true) {
+  } else if provider["available"].as_bool() != Some(true) && !paused(provider) {
     content.push_str("<p class=status-note>Retry time unknown</p>");
   }
   if health["recovery_probe_required"].as_bool() == Some(true) {
     content.push_str("<p class=status-note>Recovery probe required</p>");
+  }
+  // Offer the override only where it has something to clear.
+  if cooldown > 0
+    || health["quota_resets_at"].is_number()
+    || health["recovery_probe_required"].as_bool() == Some(true)
+    || provider["daily_quota"]["remote_exhausted_until_ms"].is_number()
+  {
+    let name = escape(provider["name"].as_str().unwrap_or_default());
+    let _ = write!(
+      content,
+      "<form class=status-clear method=post action=\"/web/status/clear-cooldown?provider={name}\"><button aria-label=\"Clear {name} cooldown\" title=\"Clear the cooldown so this provider is eligible again now.\">Clear cooldown</button></form>"
+    );
   }
   if provider["budget"].is_object() {
     match provider["budget"]["period_end"].as_i64() {

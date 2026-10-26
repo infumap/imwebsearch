@@ -420,6 +420,16 @@ pub async fn clear_provider_cooldown(name: &str) -> InfuResult<bool> {
   Ok(found)
 }
 
+/// Pause or resume `name` in whichever pool holds it. Returns false for an
+/// unknown or disabled provider.
+pub async fn set_provider_paused(name: &str, paused: bool) -> InfuResult<bool> {
+  let mut found = false;
+  for pool in configured_pools()? {
+    found |= pool.router.set_paused(name, paused).await.map_err(|error| error.to_string())?;
+  }
+  Ok(found)
+}
+
 /// Try general-web provider `name` first for the next search only, clearing
 /// any cooldown so that request is sent. It acts as an early recovery probe: a
 /// success restores the provider and a failure starts a fresh cooldown.
